@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig(({ mode }) => ({
-  base: mode === "production" ? "/smart-shopping-list/" : "/",
+  base: mode === "production" ? "/ListOfProducts/" : "/",
   plugins: [
     react(),
     VitePWA({

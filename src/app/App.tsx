@@ -107,6 +107,7 @@ export const App = () => {
   const currentListItems = currentShoppingListId
     ? items.filter((item) => item.shoppingListId === currentShoppingListId)
     : [];
+  const unboughtItemsCount = items.filter((item) => !item.isBought).length;
   const currentBudgetSummary = currentListMeta
     ? getBudgetSummary(currentListItems, priceObservations, currentListMeta)
     : null;
@@ -130,6 +131,23 @@ export const App = () => {
   useEffect(() => {
     runAsyncAction(initialize());
   }, [initialize]);
+
+  useEffect(() => {
+    if (
+      !isReady ||
+      !("setAppBadge" in navigator) ||
+      !("clearAppBadge" in navigator)
+    ) {
+      return;
+    }
+
+    if (unboughtItemsCount === 0) {
+      runAsyncAction(navigator.clearAppBadge());
+      return;
+    }
+
+    runAsyncAction(navigator.setAppBadge(unboughtItemsCount));
+  }, [isReady, unboughtItemsCount]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "auto" });

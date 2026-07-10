@@ -498,7 +498,7 @@ export const readShoppingDatabaseSnapshot = async (): Promise<ShoppingDatabaseSn
         return Number(firstItem.isBought) - Number(secondItem.isBought);
       }
 
-      return firstItem.createdAt - secondItem.createdAt;
+      return secondItem.createdAt - firstItem.createdAt;
     }),
     templates: [...templates].sort((firstTemplate, secondTemplate) => {
       return firstTemplate.name.localeCompare(secondTemplate.name, "en");

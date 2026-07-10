@@ -140,6 +140,11 @@ export type AppCopy = {
   categoryDialog: {
     title: string;
     description: (name: string) => string;
+    detailsTitle: string;
+    nameLabel: string;
+    quantityLabel: string;
+    unitLabel: string;
+    saveChanges: string;
     categoryTitle: string;
     optional: string;
     optionalDescription: string;
@@ -364,6 +369,11 @@ const englishCopy: AppCopy = {
   categoryDialog: {
     title: "Item details",
     description: (name) => `Settings and personal price history for “${name}”.`,
+    detailsTitle: "Edit item",
+    nameLabel: "Name",
+    quantityLabel: "Quantity",
+    unitLabel: "Unit",
+    saveChanges: "Save changes",
     categoryTitle: "Category",
     optional: "Can skip",
     optionalDescription: "Budget review may suggest removing this item",
@@ -623,6 +633,11 @@ const ukrainianCopy: AppCopy = {
   categoryDialog: {
     title: "Деталі товару",
     description: (name) => `Налаштування та особиста історія цін для «${name}».`,
+    detailsTitle: "Редагування товару",
+    nameLabel: "Назва",
+    quantityLabel: "Кількість",
+    unitLabel: "Одиниця",
+    saveChanges: "Зберегти зміни",
     categoryTitle: "Категорія",
     optional: "Можна не купувати",
     optionalDescription: "Під час перегляду бюджету застосунок може запропонувати прибрати цей товар",

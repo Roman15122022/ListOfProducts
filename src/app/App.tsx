@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import {
   Apple,
   ArchiveRestore,
@@ -191,6 +191,23 @@ const getCategory = (
 
 const getCategoryIcon = (categoryId: string): LucideIcon =>
   categoryIcons[categoryId] ?? Package;
+
+const useIsMobileViewport = (): boolean => {
+  const [isMobileViewport, setMobileViewport] = useState(() =>
+    window.matchMedia("(max-width: 719px)").matches,
+  );
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 719px)");
+    const updateViewport = () => setMobileViewport(mediaQuery.matches);
+
+    updateViewport();
+    mediaQuery.addEventListener("change", updateViewport);
+    return () => mediaQuery.removeEventListener("change", updateViewport);
+  }, []);
+
+  return isMobileViewport;
+};
 
 const getCurrentShoppingListId = (items: ShoppingItem[]): string | undefined => {
   const activeItem = [...items]
@@ -444,6 +461,7 @@ export const App = () => {
     resetData,
     setItemCategory,
     setItemNecessity,
+    updateItem,
     setShoppingListBudget,
     savePriceObservation,
     updateItemQuantity,
@@ -460,6 +478,7 @@ export const App = () => {
   const [installPrompt, setInstallPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const isMobileViewport = useIsMobileViewport();
 
   const language = resolveDisplayLanguage(settings?.language);
   const copy = getAppCopy(language);
@@ -826,7 +845,8 @@ export const App = () => {
 
   return (
     <LocalizationContext.Provider value={{ copy, language }}>
-      <main className="app-shell">
+      <MotionConfig reducedMotion={isMobileViewport ? "always" : "user"}>
+        <main className="app-shell">
       <div className="app-frame">
         <DesktopNavigation activeScreen={activeScreen} onSelect={selectScreen} />
         <section className="app-main">
@@ -943,6 +963,12 @@ export const App = () => {
             }}
             onSetNecessity={async (necessity) => {
               const updatedItem = await setItemNecessity(selectedItem.id, necessity);
+              if (updatedItem) {
+                setSelectedItem(updatedItem);
+              }
+            }}
+            onUpdate={async (changes) => {
+              const updatedItem = await updateItem(selectedItem.id, changes);
               if (updatedItem) {
                 setSelectedItem(updatedItem);
               }
@@ -1064,7 +1090,8 @@ export const App = () => {
           </div>
         )}
       </AnimatePresence>
-      </main>
+        </main>
+      </MotionConfig>
     </LocalizationContext.Provider>
   );
 };
@@ -1626,10 +1653,25 @@ const ShoppingItemRow = ({
   onOpenCategory: (item: ShoppingItem) => void;
 }) => {
   const { copy, language } = useLocalization();
+  const priceObservations = useShoppingStore((state) => state.priceObservations);
+  const listMeta = useShoppingStore((state) =>
+    state.shoppingListMeta.find((meta) => meta.shoppingListId === item.shoppingListId),
+  );
+  const priceStats = listMeta
+    ? getProductPriceStats(
+        {
+          normalizedName: item.normalizedName,
+          quantity: 1,
+          unit: getPriceReferenceUnit(item.unit),
+        },
+        priceObservations,
+        listMeta.currency,
+        listMeta.countryCode,
+      )
+    : null;
 
   return (
-    <motion.article
-      layout
+    <article
       className={`item-row ${item.isBought ? "is-bought" : ""} ${isShoppingMode ? "shop-item" : ""}`}
     >
       <button
@@ -1651,6 +1693,16 @@ const ShoppingItemRow = ({
           <span className="item-meta">
             {formatQuantity(item.quantity, item.unit, language)} · {getCategory(item.categoryId, language).name}
           </span>
+          {priceStats && (
+            <span className="item-price">
+              {formatMinorCurrency(priceStats.lastAmountMinor, listMeta?.currency ?? "UAH", language)} /{" "}
+              {formatQuantity(
+                priceStats.referenceQuantity,
+                priceStats.referenceUnit,
+                language,
+              )}
+            </span>
+          )}
         </span>
       </button>
       <button
@@ -1670,7 +1722,7 @@ const ShoppingItemRow = ({
       >
         <Trash2 size={isShoppingMode ? 19 : 17} />
       </button>
-    </motion.article>
+    </article>
   );
 };
 
@@ -1696,6 +1748,7 @@ const SuggestionsScreen = ({
     hasPurchaseHistory
       ? frequentProducts
       : copy.quickProducts.map((item) => item.split(" ")[0]);
+  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   const breakfastTemplate =
     templates.find((template) => template.id === "starter-breakfast") ?? templates[0];
   const localizedBreakfastTemplate = breakfastTemplate
@@ -1747,15 +1800,22 @@ const SuggestionsScreen = ({
             </p>
             <div className="suggested-products">
               {shownProducts.map((product) => (
-                <span key={product} className="product-pill">
+                <button
+                  key={product}
+                  className={`suggested-product-button ${selectedProduct === product ? "is-selected" : ""}`}
+                  type="button"
+                  aria-pressed={selectedProduct === product}
+                  onClick={() => setSelectedProduct(product)}
+                >
                   {product}
-                </span>
+                </button>
               ))}
             </div>
             <button
               className="button button-primary"
               type="button"
-              onClick={() => runAsyncAction(onAddText(shownProducts.join(", ")))}
+              disabled={!selectedProduct}
+              onClick={() => selectedProduct && runAsyncAction(onAddText(selectedProduct))}
             >
               <Plus size={17} />
               {copy.suggestions.addToList}
@@ -2379,6 +2439,7 @@ const CategoryDialog = ({
   onClose,
   onSelect,
   onSetNecessity,
+  onUpdate,
   onAddPrice,
 }: {
   item: ShoppingItem;
@@ -2387,15 +2448,92 @@ const CategoryDialog = ({
   onClose: () => void;
   onSelect: (categoryId: string) => Promise<void>;
   onSetNecessity: (necessity: ItemNecessity) => Promise<void>;
+  onUpdate: (changes: { name: string; quantity: number; unit: ShoppingUnit }) => Promise<void>;
   onAddPrice: () => void;
 }) => {
   const { copy, language } = useLocalization();
+  const [name, setName] = useState(item.name);
+  const [quantity, setQuantity] = useState(String(item.quantity));
+  const [unit, setUnit] = useState<ShoppingUnit>(item.unit);
+  const [isSaving, setSaving] = useState(false);
+  const parsedQuantity = Number(quantity.replace(",", "."));
+  const isQuantityValid = Number.isFinite(parsedQuantity) && parsedQuantity > 0;
+  const availableUnits =
+    item.isBought && priceStats
+      ? shoppingUnits.filter((candidate) => arePriceUnitsCompatible(candidate, item.unit))
+      : shoppingUnits;
+
+  useEffect(() => {
+    setName(item.name);
+    setQuantity(String(item.quantity));
+    setUnit(item.unit);
+  }, [item]);
+
+  const saveItemDetails = async () => {
+    if (!name.trim() || !isQuantityValid || isSaving) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onUpdate({ name: name.trim(), quantity: parsedQuantity, unit });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <DialogFrame onClose={onClose}>
       <div className="dialog-content">
         <h2 id="dialog-title">{copy.categoryDialog.title}</h2>
         <p id="dialog-description">{copy.categoryDialog.description(item.name)}</p>
+        <div className="dialog-section">
+          <h3>{copy.categoryDialog.detailsTitle}</h3>
+          <div className="dialog-form form-grid">
+            <label className="field-label is-wide">
+              {copy.categoryDialog.nameLabel}
+              <input
+                className="field-input"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label className="field-label">
+              {copy.categoryDialog.quantityLabel}
+              <input
+                className="field-input"
+                type="text"
+                inputMode="decimal"
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+              />
+            </label>
+            <label className="field-label">
+              {copy.categoryDialog.unitLabel}
+              <select
+                className="field-select"
+                value={unit}
+                onChange={(event) => setUnit(event.target.value as ShoppingUnit)}
+              >
+                {availableUnits.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {getUnitLabel(candidate, language)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={!name.trim() || !isQuantityValid || isSaving}
+            onClick={() => void saveItemDetails()}
+          >
+            <Pencil size={17} />
+            {copy.categoryDialog.saveChanges}
+          </button>
+        </div>
         <div className="dialog-section">
           <h3>{copy.categoryDialog.categoryTitle}</h3>
           <div className="category-options">

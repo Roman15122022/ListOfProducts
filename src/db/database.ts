@@ -2,10 +2,12 @@ import Dexie, { type Table } from "dexie";
 
 import { createDefaultSettings, createStarterTemplates, defaultCategories } from "../data/catalog";
 import type {
+  PantryItem,
   PriceObservation,
   ProductMemory,
   PurchaseEvent,
   ShoppingCategory,
+  ShoppingBackup,
   ShoppingItem,
   ShoppingListMeta,
   ShoppingSettings,
@@ -57,6 +59,7 @@ export class ShoppingDatabase extends Dexie {
   productMemory!: Table<ProductMemory, string>;
   shoppingListMeta!: Table<ShoppingListMeta, string>;
   priceObservations!: Table<PriceObservation, string>;
+  pantryItems!: Table<PantryItem, string>;
 
   constructor() {
     super("smart-shopping-list");
@@ -341,6 +344,39 @@ export class ShoppingDatabase extends Dexie {
           await shoppingListMetaTable.bulkPut(migratedShoppingListMeta);
         }
       });
+
+    this.version(6)
+      .stores({
+        categories: "id, sortOrder, name",
+        items:
+          "id, shoppingListId, normalizedName, categoryId, necessity, isBought, createdAt, updatedAt, boughtAt",
+        templates: "id, createdAt, updatedAt",
+        settings: "id",
+        purchaseEvents:
+          "id, shoppingListId, itemId, normalizedName, categoryId, boughtAt",
+        productMemory: "id, &normalizedName, categoryId, lastBoughtAt",
+        shoppingListMeta:
+          "shoppingListId, currency, countryCode, createdAt, updatedAt",
+        priceObservations:
+          "id, shoppingListId, itemId, purchaseEventId, normalizedName, currency, [normalizedName+currency+packageUnit], source, observedAt",
+        pantryItems: "id, &canonicalName, categoryId, updatedAt",
+      })
+      .upgrade(async (transaction) => {
+        const settingsTable = transaction.table<ShoppingSettings, string>("settings");
+        const existingSettings = await settingsTable.get(SETTINGS_RECORD_ID);
+
+        if (!existingSettings) {
+          return;
+        }
+
+        await settingsTable.update(SETTINGS_RECORD_ID, {
+          recipeDiet: existingSettings.recipeDiet ?? null,
+          recipeHealthLabels: Array.isArray(existingSettings.recipeHealthLabels)
+            ? existingSettings.recipeHealthLabels
+            : [],
+          updatedAt: Date.now(),
+        });
+      });
   }
 }
 
@@ -355,111 +391,145 @@ export interface ShoppingDatabaseSnapshot {
   productMemory: ProductMemory[];
   shoppingListMeta: ShoppingListMeta[];
   priceObservations: PriceObservation[];
+  pantryItems: PantryItem[];
 }
+
+const databaseTables = [
+  shoppingDatabase.categories,
+  shoppingDatabase.items,
+  shoppingDatabase.templates,
+  shoppingDatabase.settings,
+  shoppingDatabase.purchaseEvents,
+  shoppingDatabase.productMemory,
+  shoppingDatabase.shoppingListMeta,
+  shoppingDatabase.priceObservations,
+  shoppingDatabase.pantryItems,
+] as const;
+
+const defaultedDatabaseTables = [
+  shoppingDatabase.categories,
+  shoppingDatabase.templates,
+  shoppingDatabase.settings,
+  shoppingDatabase.shoppingListMeta,
+  shoppingDatabase.priceObservations,
+  shoppingDatabase.pantryItems,
+] as const;
+
+const applyDatabaseDefaults = async (): Promise<void> => {
+  const currentTimestamp = Date.now();
+  const existingCategoriesById = new Map(
+    (await shoppingDatabase.categories.toArray()).map((category) => [category.id, category]),
+  );
+  const missingCategories: ShoppingCategory[] = [];
+  const refreshedCategories: ShoppingCategory[] = [];
+
+  for (const defaultCategory of defaultCategories) {
+    const existingCategory = existingCategoriesById.get(defaultCategory.id);
+
+    if (!existingCategory) {
+      missingCategories.push({ ...defaultCategory });
+      continue;
+    }
+
+    if (existingCategory.isDefault) {
+      refreshedCategories.push({
+        ...existingCategory,
+        name: defaultCategory.name,
+        sortOrder: defaultCategory.sortOrder,
+      });
+    }
+  }
+
+  if (missingCategories.length > 0) {
+    await shoppingDatabase.categories.bulkAdd(missingCategories);
+  }
+
+  if (refreshedCategories.length > 0) {
+    await shoppingDatabase.categories.bulkPut(refreshedCategories);
+  }
+
+  const starterTemplates = createStarterTemplates(currentTimestamp);
+  const existingTemplatesById = new Map(
+    (await shoppingDatabase.templates.toArray()).map((template) => [template.id, template]),
+  );
+  const missingTemplates: ShoppingTemplate[] = [];
+  const refreshedTemplates: ShoppingTemplate[] = [];
+
+  for (const starterTemplate of starterTemplates) {
+    const existingTemplate = existingTemplatesById.get(starterTemplate.id);
+
+    if (!existingTemplate) {
+      missingTemplates.push(starterTemplate);
+      continue;
+    }
+
+    if (existingTemplate.isStarter) {
+      refreshedTemplates.push({
+        ...starterTemplate,
+        createdAt: existingTemplate.createdAt,
+      });
+    }
+  }
+
+  if (missingTemplates.length > 0) {
+    await shoppingDatabase.templates.bulkAdd(missingTemplates);
+  }
+
+  if (refreshedTemplates.length > 0) {
+    await shoppingDatabase.templates.bulkPut(refreshedTemplates);
+  }
+
+  const existingSettings = await shoppingDatabase.settings.get(SETTINGS_RECORD_ID);
+
+  if (!existingSettings) {
+    await shoppingDatabase.settings.add(createDefaultSettings(currentTimestamp));
+  } else {
+    const settingsUpdates: Partial<ShoppingSettings> = {};
+
+    if (existingSettings.language === "ru") {
+      settingsUpdates.language = "en";
+    }
+
+    if (existingSettings.recipeDiet === undefined) {
+      settingsUpdates.recipeDiet = null;
+    }
+
+    if (!Array.isArray(existingSettings.recipeHealthLabels)) {
+      settingsUpdates.recipeHealthLabels = [];
+    }
+
+    if (Object.keys(settingsUpdates).length > 0) {
+      await shoppingDatabase.settings.update(SETTINGS_RECORD_ID, {
+        ...settingsUpdates,
+        updatedAt: currentTimestamp,
+      });
+    }
+  }
+
+  const listMetaById = new Map(
+    (await shoppingDatabase.shoppingListMeta.toArray()).map((meta) => [
+      meta.shoppingListId,
+      meta,
+    ]),
+  );
+  const observationsToUpdate = (await shoppingDatabase.priceObservations.toArray())
+    .filter((observation) => !observation.countryCode)
+    .map((observation) => ({
+      ...observation,
+      countryCode:
+        listMetaById.get(observation.shoppingListId)?.countryCode ?? "UA",
+    }));
+
+  if (observationsToUpdate.length > 0) {
+    await shoppingDatabase.priceObservations.bulkPut(observationsToUpdate);
+  }
+};
 
 export const ensureDatabaseDefaults = async (): Promise<void> => {
   await shoppingDatabase.transaction(
     "rw",
-    [
-      shoppingDatabase.categories,
-      shoppingDatabase.templates,
-      shoppingDatabase.settings,
-      shoppingDatabase.shoppingListMeta,
-      shoppingDatabase.priceObservations,
-    ],
-    async () => {
-      const currentTimestamp = Date.now();
-      const existingCategoriesById = new Map(
-        (await shoppingDatabase.categories.toArray()).map((category) => [category.id, category]),
-      );
-      const missingCategories: ShoppingCategory[] = [];
-      const refreshedCategories: ShoppingCategory[] = [];
-
-      for (const defaultCategory of defaultCategories) {
-        const existingCategory = existingCategoriesById.get(defaultCategory.id);
-
-        if (!existingCategory) {
-          missingCategories.push({ ...defaultCategory });
-          continue;
-        }
-
-        if (existingCategory.isDefault) {
-          refreshedCategories.push({
-            ...existingCategory,
-            name: defaultCategory.name,
-            sortOrder: defaultCategory.sortOrder,
-          });
-        }
-      }
-
-      if (missingCategories.length > 0) {
-        await shoppingDatabase.categories.bulkAdd(missingCategories);
-      }
-
-      if (refreshedCategories.length > 0) {
-        await shoppingDatabase.categories.bulkPut(refreshedCategories);
-      }
-
-      const starterTemplates = createStarterTemplates(currentTimestamp);
-      const existingTemplatesById = new Map(
-        (await shoppingDatabase.templates.toArray()).map((template) => [template.id, template]),
-      );
-      const missingTemplates: ShoppingTemplate[] = [];
-      const refreshedTemplates: ShoppingTemplate[] = [];
-
-      for (const starterTemplate of starterTemplates) {
-        const existingTemplate = existingTemplatesById.get(starterTemplate.id);
-
-        if (!existingTemplate) {
-          missingTemplates.push(starterTemplate);
-          continue;
-        }
-
-        if (existingTemplate.isStarter) {
-          refreshedTemplates.push({
-            ...starterTemplate,
-            createdAt: existingTemplate.createdAt,
-          });
-        }
-      }
-
-      if (missingTemplates.length > 0) {
-        await shoppingDatabase.templates.bulkAdd(missingTemplates);
-      }
-
-      if (refreshedTemplates.length > 0) {
-        await shoppingDatabase.templates.bulkPut(refreshedTemplates);
-      }
-
-      const existingSettings = await shoppingDatabase.settings.get(SETTINGS_RECORD_ID);
-
-      if (!existingSettings) {
-        await shoppingDatabase.settings.add(createDefaultSettings(currentTimestamp));
-      } else if (existingSettings.language === "ru") {
-        await shoppingDatabase.settings.update(SETTINGS_RECORD_ID, {
-          language: "en",
-          updatedAt: currentTimestamp,
-        });
-      }
-
-      const listMetaById = new Map(
-        (await shoppingDatabase.shoppingListMeta.toArray()).map((meta) => [
-          meta.shoppingListId,
-          meta,
-        ]),
-      );
-      const observationsToUpdate = (await shoppingDatabase.priceObservations.toArray())
-        .filter((observation) => !observation.countryCode)
-        .map((observation) => ({
-          ...observation,
-          countryCode:
-            listMetaById.get(observation.shoppingListId)?.countryCode ?? "UA",
-        }));
-
-      if (observationsToUpdate.length > 0) {
-        await shoppingDatabase.priceObservations.bulkPut(observationsToUpdate);
-      }
-    },
+    defaultedDatabaseTables,
+    applyDatabaseDefaults,
   );
 };
 
@@ -473,16 +543,33 @@ export const readShoppingDatabaseSnapshot = async (): Promise<ShoppingDatabaseSn
     productMemory,
     shoppingListMeta,
     priceObservations,
-  ] = await Promise.all([
-    shoppingDatabase.categories.toArray(),
-    shoppingDatabase.items.toArray(),
-    shoppingDatabase.templates.toArray(),
-    shoppingDatabase.settings.get(SETTINGS_RECORD_ID),
-    shoppingDatabase.purchaseEvents.toArray(),
-    shoppingDatabase.productMemory.toArray(),
-    shoppingDatabase.shoppingListMeta.toArray(),
-    shoppingDatabase.priceObservations.toArray(),
-  ]);
+    pantryItems,
+  ] = await shoppingDatabase.transaction(
+    "r",
+    [
+      shoppingDatabase.categories,
+      shoppingDatabase.items,
+      shoppingDatabase.templates,
+      shoppingDatabase.settings,
+      shoppingDatabase.purchaseEvents,
+      shoppingDatabase.productMemory,
+      shoppingDatabase.shoppingListMeta,
+      shoppingDatabase.priceObservations,
+      shoppingDatabase.pantryItems,
+    ],
+    async () =>
+      Promise.all([
+        shoppingDatabase.categories.toArray(),
+        shoppingDatabase.items.toArray(),
+        shoppingDatabase.templates.toArray(),
+        shoppingDatabase.settings.get(SETTINGS_RECORD_ID),
+        shoppingDatabase.purchaseEvents.toArray(),
+        shoppingDatabase.productMemory.toArray(),
+        shoppingDatabase.shoppingListMeta.toArray(),
+        shoppingDatabase.priceObservations.toArray(),
+        shoppingDatabase.pantryItems.toArray(),
+      ]),
+  );
 
   if (!settings) {
     await ensureDatabaseDefaults();
@@ -517,22 +604,16 @@ export const readShoppingDatabaseSnapshot = async (): Promise<ShoppingDatabaseSn
       (firstObservation, secondObservation) =>
         secondObservation.observedAt - firstObservation.observedAt,
     ),
+    pantryItems: [...pantryItems].sort(
+      (firstItem, secondItem) => secondItem.updatedAt - firstItem.updatedAt,
+    ),
   };
 };
 
 export const clearShoppingDatabase = async (): Promise<void> => {
   await shoppingDatabase.transaction(
     "rw",
-    [
-      shoppingDatabase.categories,
-      shoppingDatabase.items,
-      shoppingDatabase.templates,
-      shoppingDatabase.settings,
-      shoppingDatabase.purchaseEvents,
-      shoppingDatabase.productMemory,
-      shoppingDatabase.shoppingListMeta,
-      shoppingDatabase.priceObservations,
-    ],
+    databaseTables,
     async () => {
       await Promise.all([
         shoppingDatabase.categories.clear(),
@@ -543,12 +624,57 @@ export const clearShoppingDatabase = async (): Promise<void> => {
         shoppingDatabase.productMemory.clear(),
         shoppingDatabase.shoppingListMeta.clear(),
         shoppingDatabase.priceObservations.clear(),
+        shoppingDatabase.pantryItems.clear(),
       ]);
     },
   );
 };
 
+const writeShoppingDatabaseBackup = async (backup: ShoppingBackup): Promise<void> => {
+  const recordsToWrite: Array<Promise<unknown>> = [];
+
+  if (backup.categories.length > 0) {
+    recordsToWrite.push(shoppingDatabase.categories.bulkPut(backup.categories));
+  }
+  if (backup.items.length > 0) {
+    recordsToWrite.push(shoppingDatabase.items.bulkPut(backup.items));
+  }
+  if (backup.shoppingListMeta.length > 0) {
+    recordsToWrite.push(shoppingDatabase.shoppingListMeta.bulkPut(backup.shoppingListMeta));
+  }
+  if (backup.priceObservations.length > 0) {
+    recordsToWrite.push(shoppingDatabase.priceObservations.bulkPut(backup.priceObservations));
+  }
+  if (backup.productMemory.length > 0) {
+    recordsToWrite.push(shoppingDatabase.productMemory.bulkPut(backup.productMemory));
+  }
+  if (backup.pantryItems.length > 0) {
+    recordsToWrite.push(shoppingDatabase.pantryItems.bulkPut(backup.pantryItems));
+  }
+  if (backup.templates.length > 0) {
+    recordsToWrite.push(shoppingDatabase.templates.bulkPut(backup.templates));
+  }
+  if (backup.settings.length > 0) {
+    recordsToWrite.push(shoppingDatabase.settings.bulkPut(backup.settings));
+  }
+  if (backup.purchaseEvents.length > 0) {
+    recordsToWrite.push(shoppingDatabase.purchaseEvents.bulkPut(backup.purchaseEvents));
+  }
+
+  await Promise.all(recordsToWrite);
+};
+
+export const replaceShoppingDatabase = async (backup: ShoppingBackup): Promise<void> => {
+  await shoppingDatabase.transaction("rw", databaseTables, async () => {
+    await Promise.all(databaseTables.map((table) => table.clear()));
+    await writeShoppingDatabaseBackup(backup);
+    await applyDatabaseDefaults();
+  });
+};
+
 export const resetShoppingDatabase = async (): Promise<void> => {
-  await clearShoppingDatabase();
-  await ensureDatabaseDefaults();
+  await shoppingDatabase.transaction("rw", databaseTables, async () => {
+    await Promise.all(databaseTables.map((table) => table.clear()));
+    await applyDatabaseDefaults();
+  });
 };

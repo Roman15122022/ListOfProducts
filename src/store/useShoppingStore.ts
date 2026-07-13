@@ -11,12 +11,15 @@ import {
   SETTINGS_RECORD_ID,
   ensureDatabaseDefaults,
   readShoppingDatabaseSnapshot,
+  replaceShoppingDatabase,
   resetShoppingDatabase,
   shoppingDatabase,
 } from "../db/database";
 import type {
   CurrencyCode,
   ItemNecessity,
+  PantryItem,
+  PantryItemInput,
   PriceObservation,
   PriceObservationInput,
   ProductMemory,
@@ -33,6 +36,7 @@ import type {
   ShoppingUnit,
   TemplateItem,
 } from "../domain/types";
+import { recipeDietLabels, recipeHealthLabels } from "../domain/types";
 import { capitalizeProductName, createUuid } from "../lib/format";
 import {
   normalizeShoppingUnit,
@@ -43,6 +47,10 @@ import {
 type SettingsUpdate = Partial<Omit<ShoppingSettings, "id" | "updatedAt">>;
 type CategoryUpdate = Partial<Pick<ShoppingCategory, "name" | "sortOrder">>;
 type ItemDraft = ShoppingItemInput & { normalizedName?: string };
+type CreateItemsOptions = {
+  mergeExisting?: boolean;
+  shoppingListId?: string;
+};
 type ImportedShoppingItem = Omit<ShoppingItem, "shoppingListId" | "necessity"> & {
   shoppingListId?: string;
   necessity?: ItemNecessity;
@@ -53,6 +61,28 @@ type ImportedPurchaseEvent = Omit<PurchaseEvent, "shoppingListId"> & {
 type ImportedPriceObservation = Omit<PriceObservation, "countryCode"> & {
   countryCode?: string;
 };
+type ImportedShoppingSettings = Omit<
+  ShoppingSettings,
+  "recipeDiet" | "recipeHealthLabels"
+> & {
+  recipeDiet?: ShoppingSettings["recipeDiet"];
+  recipeHealthLabels?: ShoppingSettings["recipeHealthLabels"];
+};
+
+export interface ClearBoughtResult {
+  clearedCount: number;
+  pantryAddedCount: number;
+}
+
+export interface PantryItemsResult {
+  addedItems: PantryItem[];
+  existingCount: number;
+}
+
+export interface RecipeItemsResult {
+  addedItems: ShoppingItem[];
+  skippedCount: number;
+}
 
 export interface ShoppingStoreState {
   isReady: boolean;
@@ -67,6 +97,7 @@ export interface ShoppingStoreState {
   productMemory: ProductMemory[];
   shoppingListMeta: ShoppingListMeta[];
   priceObservations: PriceObservation[];
+  pantryItems: PantryItem[];
   initialize: () => Promise<void>;
   refresh: () => Promise<void>;
   addFromText: (input: string) => Promise<ShoppingItem[]>;
@@ -77,7 +108,7 @@ export interface ShoppingStoreState {
   restoreItem: (item: ShoppingItem) => Promise<void>;
   restoreItems: (items: ShoppingItem[]) => Promise<void>;
   updateItem: (itemId: string, changes: ShoppingItemUpdate) => Promise<ShoppingItem | null>;
-  updateItemQuantity: (itemId: string, quantity: number) => Promise<ShoppingItem | null>;
+  updateItemQuantities: (quantities: Record<string, number>) => Promise<ShoppingItem[]>;
   setItemNecessity: (
     itemId: string,
     necessity: ItemNecessity,
@@ -89,7 +120,14 @@ export interface ShoppingStoreState {
     currency?: CurrencyCode,
   ) => Promise<ShoppingListMeta>;
   savePriceObservation: (input: PriceObservationInput) => Promise<PriceObservation | null>;
-  clearBought: () => Promise<void>;
+  addPantryItems: (input: string) => Promise<PantryItemsResult>;
+  deletePantryItem: (itemId: string) => Promise<PantryItem | null>;
+  restorePantryItem: (item: PantryItem) => Promise<void>;
+  addRecipeIngredients: (
+    items: ShoppingItemInput[],
+    shoppingListId?: string,
+  ) => Promise<RecipeItemsResult>;
+  clearBought: (shoppingListId: string) => Promise<ClearBoughtResult>;
   clearItems: () => Promise<void>;
   applyTemplate: (template: ShoppingTemplate | string) => Promise<ShoppingItem[]>;
   createTemplate: (input: ShoppingTemplateInput) => Promise<ShoppingTemplate | null>;
@@ -231,7 +269,35 @@ const getAvailableCategoryId = async (
 
 const getDisplayName = (name: string): string => capitalizeProductName(name);
 
-const createItemsFromDrafts = async (drafts: ItemDraft[]): Promise<ShoppingItem[]> => {
+export const getCanonicalProductName = (name: string): string => {
+  const normalizedName = normalizeProductName(name);
+  const catalogProduct = productDictionary[normalizedName];
+  return normalizeProductName(catalogProduct?.name ?? normalizedName);
+};
+
+const normalizePantryInput = (input: PantryItemInput): PantryItemInput | null => {
+  const name = input.name.trim();
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    name: getDisplayName(name),
+    categoryId: input.categoryId,
+  };
+};
+
+const parsePantryInput = (
+  input: string,
+  knownProductNames: ReadonlySet<string>,
+): PantryItemInput[] =>
+  parseShoppingInput(input, knownProductNames).map((item) => ({ name: item.name }));
+
+const createItemsFromDrafts = async (
+  drafts: ItemDraft[],
+  options: CreateItemsOptions = {},
+): Promise<ShoppingItem[]> => {
   const savedItems: ShoppingItem[] = [];
 
   await shoppingDatabase.transaction(
@@ -249,8 +315,21 @@ const createItemsFromDrafts = async (drafts: ItemDraft[]): Promise<ShoppingItem[
         shoppingDatabase.items.toArray(),
         shoppingDatabase.settings.get(SETTINGS_RECORD_ID),
       ]);
-      const activeListItem = currentItems.find((item) => !item.isBought);
-      const shoppingListId = activeListItem?.shoppingListId ?? createUuid();
+      const currentListItem = [...currentItems]
+        .filter(
+          (item) =>
+            options.shoppingListId === undefined ||
+            item.shoppingListId === options.shoppingListId,
+        )
+        .sort((firstItem, secondItem) => {
+          if (firstItem.isBought !== secondItem.isBought) {
+            return Number(firstItem.isBought) - Number(secondItem.isBought);
+          }
+
+          return secondItem.updatedAt - firstItem.updatedAt;
+        })[0];
+      const shoppingListId =
+        options.shoppingListId ?? currentListItem?.shoppingListId ?? createUuid();
 
       for (const draft of drafts) {
         const normalizedName = draft.normalizedName ?? normalizeProductName(draft.name);
@@ -269,11 +348,18 @@ const createItemsFromDrafts = async (drafts: ItemDraft[]): Promise<ShoppingItem[
           .equals(normalizedName)
           .toArray();
         const existingItem = matchingItems.find(
-          (item) => !item.isBought && item.unit === unit,
+          (item) =>
+            !item.isBought &&
+            item.unit === unit &&
+            item.shoppingListId === shoppingListId,
         );
         const currentTimestamp = Date.now();
 
         if (existingItem) {
+          if (options.mergeExisting === false) {
+            continue;
+          }
+
           const updatedItem: ShoppingItem = {
             ...existingItem,
             quantity: existingItem.quantity + normalizeQuantity(draft.quantity),
@@ -340,7 +426,6 @@ const restoreShoppingItems = async (items: ShoppingItem[]): Promise<void> => {
     "rw",
     [
       shoppingDatabase.items,
-      shoppingDatabase.purchaseEvents,
       shoppingDatabase.shoppingListMeta,
       shoppingDatabase.settings,
     ],
@@ -349,17 +434,20 @@ const restoreShoppingItems = async (items: ShoppingItem[]): Promise<void> => {
         shoppingDatabase.items.toArray(),
         shoppingDatabase.settings.get(SETTINGS_RECORD_ID),
       ]);
-      let activeShoppingListId = currentItems.find((item) => !item.isBought)?.shoppingListId;
+      const latestCurrentItem = [...currentItems].sort(
+        (firstItem, secondItem) => secondItem.updatedAt - firstItem.updatedAt,
+      )[0];
+      let activeShoppingListId =
+        currentItems.find((item) => !item.isBought)?.shoppingListId ??
+        latestCurrentItem?.shoppingListId;
       const currentTimestamp = Date.now();
 
       for (const item of items) {
-        if (!item.isBought && !activeShoppingListId) {
+        if (!activeShoppingListId) {
           activeShoppingListId = item.shoppingListId;
         }
 
-        const shoppingListId = item.isBought
-          ? item.shoppingListId
-          : (activeShoppingListId ?? item.shoppingListId);
+        const shoppingListId = activeShoppingListId ?? item.shoppingListId;
         const restoredItem: ShoppingItem = {
           ...item,
           shoppingListId,
@@ -368,22 +456,6 @@ const restoreShoppingItems = async (items: ShoppingItem[]): Promise<void> => {
         };
 
         await shoppingDatabase.items.put(restoredItem);
-
-        if (restoredItem.isBought) {
-          const purchaseEvents = await shoppingDatabase.purchaseEvents
-            .where("itemId")
-            .equals(restoredItem.id)
-            .toArray();
-
-          if (purchaseEvents.length > 0) {
-            await shoppingDatabase.purchaseEvents.bulkPut(
-              purchaseEvents.map((purchaseEvent) => ({
-                ...purchaseEvent,
-                shoppingListId,
-              })),
-            );
-          }
-        }
 
         const existingMeta = await shoppingDatabase.shoppingListMeta.get(shoppingListId);
 
@@ -506,48 +578,75 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.trim().length > 0 && value.length <= 500;
+
+const hasUniqueValues = <Value,>(
+  values: readonly Value[],
+  getKey: (value: Value) => string,
+): boolean => new Set(values.map(getKey)).size === values.length;
+
 const isShoppingCategory = (value: unknown): value is ShoppingCategory =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.name === "string" &&
+  isNonEmptyString(value.id) &&
+  isNonEmptyString(value.name) &&
   isFiniteNumber(value.sortOrder) &&
   typeof value.isDefault === "boolean";
 
+const isPantryItem = (value: unknown): value is PantryItem =>
+  isRecord(value) &&
+  isNonEmptyString(value.id) &&
+  isNonEmptyString(value.name) &&
+  isNonEmptyString(value.normalizedName) &&
+  isNonEmptyString(value.canonicalName) &&
+  isNonEmptyString(value.categoryId) &&
+  isNonNegativeInteger(value.createdAt) &&
+  isNonNegativeInteger(value.updatedAt) &&
+  (value.lastPurchasedAt === undefined || isNonNegativeInteger(value.lastPurchasedAt));
+
 const isShoppingItem = (value: unknown): value is ImportedShoppingItem =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  (value.shoppingListId === undefined || typeof value.shoppingListId === "string") &&
-  typeof value.name === "string" &&
-  typeof value.normalizedName === "string" &&
-  isFiniteNumber(value.quantity) &&
+  isNonEmptyString(value.id) &&
+  (value.shoppingListId === undefined || isNonEmptyString(value.shoppingListId)) &&
+  isNonEmptyString(value.name) &&
+  isNonEmptyString(value.normalizedName) &&
+  isPositiveFiniteNumber(value.quantity) &&
   normalizeShoppingUnit(value.unit) !== null &&
-  typeof value.categoryId === "string" &&
+  isNonEmptyString(value.categoryId) &&
   (value.necessity === undefined || isItemNecessity(value.necessity)) &&
   typeof value.isBought === "boolean" &&
-  isFiniteNumber(value.createdAt) &&
-  isFiniteNumber(value.updatedAt) &&
-  (value.price === undefined || isFiniteNumber(value.price)) &&
-  (value.boughtAt === undefined || isFiniteNumber(value.boughtAt));
+  isNonNegativeInteger(value.createdAt) &&
+  isNonNegativeInteger(value.updatedAt) &&
+  (value.price === undefined || (isFiniteNumber(value.price) && value.price >= 0)) &&
+  (value.boughtAt === undefined || isNonNegativeInteger(value.boughtAt));
 
 const isTemplateItem = (value: unknown): value is TemplateItem =>
   isRecord(value) &&
-  typeof value.name === "string" &&
-  typeof value.normalizedName === "string" &&
-  isFiniteNumber(value.quantity) &&
+  isNonEmptyString(value.name) &&
+  isNonEmptyString(value.normalizedName) &&
+  isPositiveFiniteNumber(value.quantity) &&
   normalizeShoppingUnit(value.unit) !== null &&
-  typeof value.categoryId === "string";
+  isNonEmptyString(value.categoryId);
 
 const isShoppingTemplate = (value: unknown): value is ShoppingTemplate =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.name === "string" &&
+  isNonEmptyString(value.id) &&
+  isNonEmptyString(value.name) &&
   Array.isArray(value.items) &&
   value.items.every(isTemplateItem) &&
-  isFiniteNumber(value.createdAt) &&
-  isFiniteNumber(value.updatedAt) &&
+  isNonNegativeInteger(value.createdAt) &&
+  isNonNegativeInteger(value.updatedAt) &&
   (value.isStarter === undefined || typeof value.isStarter === "boolean");
 
-const isShoppingSettings = (value: unknown): value is ShoppingSettings =>
+const isRecipeDietLabel = (value: unknown): value is ShoppingSettings["recipeDiet"] =>
+  value === null || recipeDietLabels.some((label) => label === value);
+
+const isRecipeHealthLabel = (
+  value: unknown,
+): value is ShoppingSettings["recipeHealthLabels"][number] =>
+  recipeHealthLabels.some((label) => label === value);
+
+const isShoppingSettings = (value: unknown): value is ImportedShoppingSettings =>
   isRecord(value) &&
   value.id === SETTINGS_RECORD_ID &&
   (value.theme === "system" || value.theme === "light" || value.theme === "dark") &&
@@ -556,71 +655,74 @@ const isShoppingSettings = (value: unknown): value is ShoppingSettings =>
   typeof value.groupByCategory === "boolean" &&
   typeof value.enableAiSuggestions === "boolean" &&
   typeof value.enableLocalMlTraining === "boolean" &&
+  (value.recipeDiet === undefined || isRecipeDietLabel(value.recipeDiet)) &&
+  (value.recipeHealthLabels === undefined ||
+    (Array.isArray(value.recipeHealthLabels) &&
+      value.recipeHealthLabels.every(isRecipeHealthLabel))) &&
   (value.currency === "UAH" ||
     value.currency === "USD" ||
     value.currency === "EUR" ||
     value.currency === "PLN") &&
-  isFiniteNumber(value.updatedAt);
+  isNonNegativeInteger(value.updatedAt);
 
 const isPurchaseEvent = (value: unknown): value is ImportedPurchaseEvent =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  (value.shoppingListId === undefined || typeof value.shoppingListId === "string") &&
-  typeof value.itemId === "string" &&
-  typeof value.itemName === "string" &&
-  typeof value.normalizedName === "string" &&
-  typeof value.categoryId === "string" &&
-  isFiniteNumber(value.quantity) &&
+  isNonEmptyString(value.id) &&
+  (value.shoppingListId === undefined || isNonEmptyString(value.shoppingListId)) &&
+  isNonEmptyString(value.itemId) &&
+  isNonEmptyString(value.itemName) &&
+  isNonEmptyString(value.normalizedName) &&
+  isNonEmptyString(value.categoryId) &&
+  isPositiveFiniteNumber(value.quantity) &&
   normalizeShoppingUnit(value.unit) !== null &&
-  (value.price === undefined || isFiniteNumber(value.price)) &&
-  (value.priceObservationId === undefined || typeof value.priceObservationId === "string") &&
+  (value.price === undefined || (isFiniteNumber(value.price) && value.price >= 0)) &&
+  (value.priceObservationId === undefined || isNonEmptyString(value.priceObservationId)) &&
   (value.actualAmountMinor === undefined || isNonNegativeInteger(value.actualAmountMinor)) &&
   (value.actualCurrency === undefined || isCurrencyCode(value.actualCurrency)) &&
-  isFiniteNumber(value.boughtAt);
+  isNonNegativeInteger(value.boughtAt);
 
 const isShoppingListMeta = (value: unknown): value is ShoppingListMeta =>
   isRecord(value) &&
-  typeof value.shoppingListId === "string" &&
-  value.shoppingListId.trim().length > 0 &&
+  isNonEmptyString(value.shoppingListId) &&
   (value.budgetAmountMinor === undefined || isNonNegativeInteger(value.budgetAmountMinor)) &&
   isCurrencyCode(value.currency) &&
-  typeof value.countryCode === "string" &&
-  value.countryCode.trim().length > 0 &&
-  isFiniteNumber(value.createdAt) &&
-  isFiniteNumber(value.updatedAt);
+  isNonEmptyString(value.countryCode) &&
+  isNonNegativeInteger(value.createdAt) &&
+  isNonNegativeInteger(value.updatedAt);
 
 const isPriceObservation = (value: unknown): value is ImportedPriceObservation =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.shoppingListId === "string" &&
-  value.shoppingListId.trim().length > 0 &&
+  isNonEmptyString(value.id) &&
+  isNonEmptyString(value.shoppingListId) &&
   (value.countryCode === undefined ||
     (typeof value.countryCode === "string" && value.countryCode.trim().length > 0)) &&
-  typeof value.itemId === "string" &&
-  (value.purchaseEventId === undefined || typeof value.purchaseEventId === "string") &&
-  typeof value.itemName === "string" &&
-  typeof value.normalizedName === "string" &&
+  isNonEmptyString(value.itemId) &&
+  (value.purchaseEventId === undefined || isNonEmptyString(value.purchaseEventId)) &&
+  isNonEmptyString(value.itemName) &&
+  isNonEmptyString(value.normalizedName) &&
   isNonNegativeInteger(value.amountMinor) &&
   isCurrencyCode(value.currency) &&
   isPositiveFiniteNumber(value.packageQuantity) &&
   normalizeShoppingUnit(value.packageUnit) !== null &&
   (value.source === "manual" || value.source === "provider") &&
-  isFiniteNumber(value.observedAt);
+  isNonNegativeInteger(value.observedAt);
 
 const isProductMemory = (value: unknown): value is ProductMemory =>
   isRecord(value) &&
-  typeof value.id === "string" &&
-  typeof value.name === "string" &&
-  typeof value.normalizedName === "string" &&
-  typeof value.categoryId === "string" &&
-  isFiniteNumber(value.defaultQuantity) &&
+  isNonEmptyString(value.id) &&
+  isNonEmptyString(value.name) &&
+  isNonEmptyString(value.normalizedName) &&
+  isNonEmptyString(value.categoryId) &&
+  isPositiveFiniteNumber(value.defaultQuantity) &&
   normalizeShoppingUnit(value.defaultUnit) !== null &&
-  isFiniteNumber(value.buyCount) &&
+  isNonNegativeInteger(value.buyCount) &&
   isRecord(value.relatedItems) &&
-  Object.values(value.relatedItems).every(isFiniteNumber) &&
-  (value.lastBoughtAt === undefined || isFiniteNumber(value.lastBoughtAt)) &&
-  (value.averageIntervalDays === undefined || isFiniteNumber(value.averageIntervalDays)) &&
-  (value.averagePrice === undefined || isFiniteNumber(value.averagePrice));
+  Object.values(value.relatedItems).every(isNonNegativeInteger) &&
+  (value.lastBoughtAt === undefined || isNonNegativeInteger(value.lastBoughtAt)) &&
+  (value.averageIntervalDays === undefined ||
+    (isFiniteNumber(value.averageIntervalDays) && value.averageIntervalDays >= 0)) &&
+  (value.averagePrice === undefined ||
+    (isFiniteNumber(value.averagePrice) && value.averagePrice >= 0));
 
 const getCanonicalUnit = (value: unknown) => normalizeShoppingUnit(value) ?? "pcs";
 
@@ -643,11 +745,14 @@ const getLocalDateKey = (timestamp: number): string => {
   return `${year}-${month}-${day}`;
 };
 
-const parseBackup = (value: unknown): ShoppingBackup => {
+export const parseShoppingBackup = (value: unknown): ShoppingBackup => {
   if (
     !isRecord(value) ||
-    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
-    !isFiniteNumber(value.exportedAt) ||
+    (value.version !== 1 &&
+      value.version !== 2 &&
+      value.version !== 3 &&
+      value.version !== 4) ||
+    !isNonNegativeInteger(value.exportedAt) ||
     !Array.isArray(value.categories) ||
     !Array.isArray(value.items) ||
     !Array.isArray(value.productMemory) ||
@@ -659,9 +764,13 @@ const parseBackup = (value: unknown): ShoppingBackup => {
   }
 
   if (
-    value.version === 3 &&
+    value.version >= 3 &&
     (!Array.isArray(value.shoppingListMeta) || !Array.isArray(value.priceObservations))
   ) {
+    throw new Error("The import file has an invalid format.");
+  }
+
+  if (value.version === 4 && !Array.isArray(value.pantryItems)) {
     throw new Error("The import file has an invalid format.");
   }
 
@@ -676,13 +785,77 @@ const parseBackup = (value: unknown): ShoppingBackup => {
     throw new Error("The import file contains unsupported data.");
   }
 
+  const backupCollections = [
+    value.categories,
+    value.items,
+    value.productMemory,
+    value.templates,
+    value.settings,
+    value.purchaseEvents,
+    Array.isArray(value.shoppingListMeta) ? value.shoppingListMeta : [],
+    Array.isArray(value.priceObservations) ? value.priceObservations : [],
+    Array.isArray(value.pantryItems) ? value.pantryItems : [],
+  ];
+  const recordCount = backupCollections.reduce(
+    (totalCount, collection) => totalCount + collection.length,
+    0,
+  );
+
+  if (recordCount > 100_000 || value.settings.length > 1) {
+    throw new Error("The import file contains too many records.");
+  }
+
+  const importedCategories = value.categories as ShoppingCategory[];
+  const importedProductMemory = value.productMemory as ProductMemory[];
+  const importedTemplates = value.templates as ShoppingTemplate[];
+
+  if (
+    !hasUniqueValues(importedCategories, (category) => category.id) ||
+    !hasUniqueValues(value.items as ImportedShoppingItem[], (item) => item.id) ||
+    !hasUniqueValues(importedProductMemory, (memory) => memory.id) ||
+    !hasUniqueValues(importedProductMemory, (memory) => memory.normalizedName) ||
+    !hasUniqueValues(importedTemplates, (template) => template.id) ||
+    !hasUniqueValues(value.purchaseEvents as ImportedPurchaseEvent[], (event) => event.id) ||
+    importedProductMemory.some(
+      (memory) => Object.keys(memory.relatedItems).length > 1_000,
+    )
+  ) {
+    throw new Error("The import file contains duplicate or unsupported records.");
+  }
+
+  const availableCategoryIds = new Set([
+    ...defaultCategories.map((category) => category.id),
+    ...importedCategories.map((category) => category.id),
+  ]);
+  const hasUnavailableCategory = [
+    ...(value.items as ImportedShoppingItem[]).map((item) => item.categoryId),
+    ...importedProductMemory.map((memory) => memory.categoryId),
+    ...(value.purchaseEvents as ImportedPurchaseEvent[]).map((event) => event.categoryId),
+    ...importedTemplates.flatMap((template) =>
+      template.items.map((item) => item.categoryId),
+    ),
+    ...(Array.isArray(value.pantryItems)
+      ? value.pantryItems.flatMap((item) =>
+          isRecord(item) && typeof item.categoryId === "string"
+            ? [item.categoryId]
+            : [],
+        )
+      : []),
+  ].some((categoryId) => !availableCategoryIds.has(categoryId));
+
+  if (hasUnavailableCategory) {
+    throw new Error("The import file references a category that does not exist.");
+  }
+
   const backupVersion = value.version;
   const importedItems = value.items as ImportedShoppingItem[];
   const importedPurchaseEvents = value.purchaseEvents as ImportedPurchaseEvent[];
   const importedShoppingListMeta =
-    backupVersion === 3 ? (value.shoppingListMeta as unknown[]) : [];
+    backupVersion >= 3 ? (value.shoppingListMeta as unknown[]) : [];
   const importedPriceObservations =
-    backupVersion === 3 ? (value.priceObservations as unknown[]) : [];
+    backupVersion >= 3 ? (value.priceObservations as unknown[]) : [];
+  const importedPantryItems =
+    backupVersion === 4 ? (value.pantryItems as unknown[]) : [];
 
   if (
     backupVersion >= 2 &&
@@ -692,7 +865,7 @@ const parseBackup = (value: unknown): ShoppingBackup => {
   }
 
   if (
-    backupVersion === 3 &&
+    backupVersion >= 3 &&
     (!importedItems.every(hasItemNecessity) ||
       !importedShoppingListMeta.every(isShoppingListMeta) ||
       !importedPriceObservations.every(isPriceObservation))
@@ -700,7 +873,39 @@ const parseBackup = (value: unknown): ShoppingBackup => {
     throw new Error("The import file contains unsupported data.");
   }
 
-  const currentShoppingListId = createUuid();
+  if (backupVersion === 4 && !importedPantryItems.every(isPantryItem)) {
+    throw new Error("The import file contains unsupported data.");
+  }
+
+  if (
+    (backupVersion >= 3 &&
+      (!hasUniqueValues(
+        importedShoppingListMeta as ShoppingListMeta[],
+        (meta) => meta.shoppingListId,
+      ) ||
+        !hasUniqueValues(
+          importedPriceObservations as ImportedPriceObservation[],
+          (observation) => observation.id,
+        ))) ||
+    (backupVersion === 4 &&
+      !hasUniqueValues(importedPantryItems as PantryItem[], (item) => item.id))
+  ) {
+    throw new Error("The import file contains duplicate records.");
+  }
+
+  const legacyShoppingListId = createUuid();
+  const orderedImportedItems = [...importedItems].sort(
+    (firstItem, secondItem) => secondItem.updatedAt - firstItem.updatedAt,
+  );
+  const latestImportedItem = orderedImportedItems[0];
+  const currentShoppingListId =
+    (backupVersion >= 2
+      ? orderedImportedItems.find((item) => !item.isBought && hasShoppingListId(item))
+          ?.shoppingListId ??
+        (latestImportedItem && hasShoppingListId(latestImportedItem)
+          ? latestImportedItem.shoppingListId
+          : undefined)
+      : undefined) ?? legacyShoppingListId;
   const currentItemIds = new Set(importedItems.map((item) => item.id));
   const legacyShoppingListIdsByDate = new Map<string, string>();
   const getLegacyShoppingListId = (purchaseEvent: ImportedPurchaseEvent): string => {
@@ -717,10 +922,7 @@ const parseBackup = (value: unknown): ShoppingBackup => {
 
   const items: ShoppingItem[] = importedItems.map((item) => ({
       ...item,
-      shoppingListId:
-        backupVersion >= 2 && hasShoppingListId(item)
-          ? item.shoppingListId
-          : currentShoppingListId,
+      shoppingListId: currentShoppingListId,
       necessity: hasItemNecessity(item) ? item.necessity : "required",
       unit: getCanonicalUnit(item.unit),
     }));
@@ -858,9 +1060,27 @@ const parseBackup = (value: unknown): ShoppingBackup => {
       actualCurrency: linkedPrice.observation.currency,
     };
   });
+  const pantryItemsByCanonicalName = new Map<string, PantryItem>();
+
+  for (const importedPantryItem of importedPantryItems as PantryItem[]) {
+    const canonicalName = getCanonicalProductName(importedPantryItem.name);
+
+    if (!canonicalName) {
+      continue;
+    }
+
+    const currentItem = pantryItemsByCanonicalName.get(canonicalName);
+    if (!currentItem || importedPantryItem.updatedAt > currentItem.updatedAt) {
+      pantryItemsByCanonicalName.set(canonicalName, {
+        ...importedPantryItem,
+        normalizedName: normalizeProductName(importedPantryItem.name),
+        canonicalName,
+      });
+    }
+  }
 
   return {
-    version: 3,
+    version: 4,
     exportedAt: value.exportedAt,
     categories: value.categories,
     items,
@@ -870,6 +1090,7 @@ const parseBackup = (value: unknown): ShoppingBackup => {
       ...memory,
       defaultUnit: getCanonicalUnit(memory.defaultUnit),
     })),
+    pantryItems: [...pantryItemsByCanonicalName.values()],
     templates: value.templates.map((template) => ({
       ...template,
       items: template.items.map((item) => ({
@@ -877,14 +1098,26 @@ const parseBackup = (value: unknown): ShoppingBackup => {
         unit: getCanonicalUnit(item.unit),
       })),
     })),
-    settings: value.settings,
+    settings: (value.settings as ImportedShoppingSettings[]).map((settings) => ({
+      ...settings,
+      recipeDiet: settings.recipeDiet ?? null,
+      recipeHealthLabels: settings.recipeHealthLabels ?? [],
+    })),
     purchaseEvents: normalizedPurchaseEvents,
   };
 };
 
 export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
+  let latestSyncRequest = 0;
+
   const sync = async (): Promise<void> => {
+    const syncRequest = latestSyncRequest + 1;
+    latestSyncRequest = syncRequest;
     const snapshot = await readShoppingDatabaseSnapshot();
+
+    if (syncRequest !== latestSyncRequest) {
+      return;
+    }
 
     set({
       categories: snapshot.categories,
@@ -896,6 +1129,7 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
       productMemory: snapshot.productMemory,
       shoppingListMeta: snapshot.shoppingListMeta,
       priceObservations: snapshot.priceObservations,
+      pantryItems: snapshot.pantryItems,
     });
   };
 
@@ -907,7 +1141,9 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
 
   const runWithError = async <Result,>(operation: () => Promise<Result>): Promise<Result> => {
     try {
-      set({ error: null });
+      if (get().error !== null) {
+        set({ error: null });
+      }
       return await operation();
     } catch (error) {
       set({ error: getErrorMessage(error) });
@@ -928,6 +1164,7 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
     productMemory: [],
     shoppingListMeta: [],
     priceObservations: [],
+    pantryItems: [],
 
     initialize: async (): Promise<void> => {
       if (get().isReady) {
@@ -1198,7 +1435,6 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
                     : undefined;
                   const updatedEvent: PurchaseEvent = {
                     ...event,
-                    shoppingListId: nextItem.shoppingListId,
                     itemName: nextItem.name,
                     normalizedName: nextItem.normalizedName,
                     categoryId: nextItem.categoryId,
@@ -1256,10 +1492,71 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
         return updatedItem;
       }),
 
-    updateItemQuantity: async (
-      itemId: string,
-      quantity: number,
-    ): Promise<ShoppingItem | null> => get().updateItem(itemId, { quantity }),
+    updateItemQuantities: async (
+      quantities: Record<string, number>,
+    ): Promise<ShoppingItem[]> =>
+      runWithError(async () => {
+        await ensureReady();
+        const quantityEntries = Object.entries(quantities);
+
+        if (quantityEntries.length === 0) {
+          return [];
+        }
+
+        if (
+          quantityEntries.some(
+            ([itemId, quantity]) =>
+              !itemId.trim() || !Number.isFinite(quantity) || quantity <= 0,
+          )
+        ) {
+          throw new Error("The item quantities are invalid.");
+        }
+
+        let updatedItems: ShoppingItem[] = [];
+
+        await shoppingDatabase.transaction(
+          "rw",
+          [shoppingDatabase.items, shoppingDatabase.shoppingListMeta],
+          async () => {
+            const currentTimestamp = Date.now();
+            const storedItems = await shoppingDatabase.items.bulkGet(
+              quantityEntries.map(([itemId]) => itemId),
+            );
+            const quantitiesByItemId = new Map(quantityEntries);
+
+            updatedItems = storedItems.flatMap((item) => {
+              if (!item || item.isBought) {
+                return [];
+              }
+
+              return [
+                {
+                  ...item,
+                  quantity: normalizeQuantity(quantitiesByItemId.get(item.id)),
+                  updatedAt: currentTimestamp,
+                },
+              ];
+            });
+
+            if (updatedItems.length === 0) {
+              return;
+            }
+
+            await shoppingDatabase.items.bulkPut(updatedItems);
+            await Promise.all(
+              [...new Set(updatedItems.map((item) => item.shoppingListId))].map(
+                (shoppingListId) =>
+                  shoppingDatabase.shoppingListMeta.update(shoppingListId, {
+                    updatedAt: currentTimestamp,
+                  }),
+              ),
+            );
+          },
+        );
+
+        await sync();
+        return updatedItems;
+      }),
 
     setItemNecessity: async (
       itemId: string,
@@ -1433,7 +1730,11 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
               ? await shoppingDatabase.purchaseEvents.get(input.purchaseEventId)
               : undefined;
 
-            if (!purchaseEvent) {
+            if (input.purchaseEventId && !purchaseEvent) {
+              throw new Error("The selected purchase was not found.");
+            }
+
+            if (!input.purchaseEventId && !purchaseEvent) {
               const itemEvents = await shoppingDatabase.purchaseEvents
                 .where("itemId")
                 .equals(input.itemId)
@@ -1510,16 +1811,245 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
         return savedObservation;
       }),
 
-    clearBought: async (): Promise<void> =>
+    addPantryItems: async (input: string): Promise<PantryItemsResult> =>
       runWithError(async () => {
         await ensureReady();
-        const boughtItems = (await shoppingDatabase.items.toArray()).filter((item) => item.isBought);
+        const currentState = get();
+        const knownProductNames = new Set([
+          ...Object.keys(productDictionary),
+          ...currentState.productMemory.map((memory) => memory.normalizedName),
+          ...currentState.items.map((item) => item.normalizedName),
+          ...currentState.pantryItems.map((item) => item.normalizedName),
+        ]);
+        const parsedItems = parsePantryInput(input, knownProductNames)
+          .map(normalizePantryInput)
+          .filter((item): item is PantryItemInput => item !== null);
+        const uniqueItems = new Map<string, PantryItemInput>();
 
-        if (boughtItems.length > 0) {
-          await shoppingDatabase.items.bulkDelete(boughtItems.map((item) => item.id));
+        for (const item of parsedItems) {
+          const canonicalName = getCanonicalProductName(item.name);
+          if (canonicalName && !uniqueItems.has(canonicalName)) {
+            uniqueItems.set(canonicalName, item);
+          }
         }
 
+        const addedItems: PantryItem[] = [];
+        let existingCount = parsedItems.length - uniqueItems.size;
+
+        await shoppingDatabase.transaction(
+          "rw",
+          [
+            shoppingDatabase.categories,
+            shoppingDatabase.pantryItems,
+            shoppingDatabase.productMemory,
+          ],
+          async () => {
+            const categories = await shoppingDatabase.categories.toArray();
+
+            for (const [canonicalName, item] of uniqueItems) {
+              const existingItem = await shoppingDatabase.pantryItems
+                .where("canonicalName")
+                .equals(canonicalName)
+                .first();
+
+              if (existingItem) {
+                existingCount += 1;
+                continue;
+              }
+
+              const normalizedName = normalizeProductName(item.name);
+              const currentTimestamp = Date.now();
+              const pantryItem: PantryItem = {
+                id: createUuid(),
+                name: item.name,
+                normalizedName,
+                canonicalName,
+                categoryId: await getAvailableCategoryId(
+                  normalizedName,
+                  categories,
+                  item.categoryId,
+                ),
+                createdAt: currentTimestamp,
+                updatedAt: currentTimestamp,
+              };
+
+              await shoppingDatabase.pantryItems.add(pantryItem);
+              addedItems.push(pantryItem);
+            }
+          },
+        );
+
         await sync();
+        return { addedItems, existingCount };
+      }),
+
+    deletePantryItem: async (itemId: string): Promise<PantryItem | null> =>
+      runWithError(async () => {
+        await ensureReady();
+        const pantryItem = await shoppingDatabase.pantryItems.get(itemId);
+
+        if (!pantryItem) {
+          return null;
+        }
+
+        await shoppingDatabase.pantryItems.delete(itemId);
+        await sync();
+        return pantryItem;
+      }),
+
+    restorePantryItem: async (item: PantryItem): Promise<void> =>
+      runWithError(async () => {
+        await ensureReady();
+        await shoppingDatabase.transaction(
+          "rw",
+          [shoppingDatabase.categories, shoppingDatabase.pantryItems],
+          async () => {
+            const [existingItem, categories, itemCategory] = await Promise.all([
+              shoppingDatabase.pantryItems
+                .where("canonicalName")
+                .equals(item.canonicalName)
+                .first(),
+              shoppingDatabase.categories.toArray(),
+              shoppingDatabase.categories.get(item.categoryId),
+            ]);
+
+            if (existingItem) {
+              return;
+            }
+
+            await shoppingDatabase.pantryItems.put({
+              ...item,
+              categoryId:
+                itemCategory?.id ?? getFallbackCategoryId(categories),
+              updatedAt: Date.now(),
+            });
+          },
+        );
+
+        await sync();
+      }),
+
+    addRecipeIngredients: async (
+      items: ShoppingItemInput[],
+      shoppingListId?: string,
+    ): Promise<RecipeItemsResult> =>
+      runWithError(async () => {
+        await ensureReady();
+        const activeCanonicalNames = new Set(
+          get()
+            .items.filter(
+              (item) =>
+                !item.isBought &&
+                (shoppingListId === undefined || item.shoppingListId === shoppingListId),
+            )
+            .map((item) => getCanonicalProductName(item.name)),
+        );
+        const itemsToAdd: ShoppingItemInput[] = [];
+        let skippedCount = 0;
+
+        for (const item of items) {
+          const normalizedItem = normalizePantryInput(item);
+          const canonicalName = normalizedItem
+            ? getCanonicalProductName(normalizedItem.name)
+            : "";
+
+          if (!normalizedItem || !canonicalName || activeCanonicalNames.has(canonicalName)) {
+            skippedCount += 1;
+            continue;
+          }
+
+          activeCanonicalNames.add(canonicalName);
+          itemsToAdd.push({ ...item, name: normalizedItem.name });
+        }
+
+        const addedItems = await createItemsFromDrafts(itemsToAdd, {
+          mergeExisting: false,
+          shoppingListId,
+        });
+        skippedCount += itemsToAdd.length - addedItems.length;
+        await sync();
+        return { addedItems, skippedCount };
+      }),
+
+    clearBought: async (shoppingListId: string): Promise<ClearBoughtResult> =>
+      runWithError(async () => {
+        await ensureReady();
+
+        if (!shoppingListId.trim()) {
+          throw new Error("The shopping list was not found.");
+        }
+
+        let result: ClearBoughtResult = { clearedCount: 0, pantryAddedCount: 0 };
+
+        await shoppingDatabase.transaction(
+          "rw",
+          [shoppingDatabase.items, shoppingDatabase.pantryItems],
+          async () => {
+            const boughtItems = (
+              await shoppingDatabase.items
+                .where("shoppingListId")
+                .equals(shoppingListId)
+                .toArray()
+            ).filter((item) => item.isBought);
+
+            if (boughtItems.length === 0) {
+              return;
+            }
+
+            const boughtItemsByCanonicalName = new Map<string, ShoppingItem>();
+            for (const item of boughtItems) {
+              const canonicalName = getCanonicalProductName(item.name);
+              const currentItem = boughtItemsByCanonicalName.get(canonicalName);
+
+              if (
+                canonicalName &&
+                (!currentItem || (item.boughtAt ?? item.updatedAt) > (currentItem.boughtAt ?? currentItem.updatedAt))
+              ) {
+                boughtItemsByCanonicalName.set(canonicalName, item);
+              }
+            }
+
+            const currentTimestamp = Date.now();
+            for (const [canonicalName, item] of boughtItemsByCanonicalName) {
+              const existingItem = await shoppingDatabase.pantryItems
+                .where("canonicalName")
+                .equals(canonicalName)
+                .first();
+              const lastPurchasedAt = item.boughtAt ?? currentTimestamp;
+
+              await shoppingDatabase.pantryItems.put(
+                existingItem
+                  ? {
+                      ...existingItem,
+                      updatedAt: currentTimestamp,
+                      lastPurchasedAt: Math.max(
+                        existingItem.lastPurchasedAt ?? 0,
+                        lastPurchasedAt,
+                      ),
+                    }
+                  : {
+                      id: createUuid(),
+                      name: item.name,
+                      normalizedName: item.normalizedName,
+                      canonicalName,
+                      categoryId: item.categoryId,
+                      createdAt: currentTimestamp,
+                      updatedAt: currentTimestamp,
+                      lastPurchasedAt,
+                    },
+              );
+            }
+
+            await shoppingDatabase.items.bulkDelete(boughtItems.map((item) => item.id));
+            result = {
+              clearedCount: boughtItems.length,
+              pantryAddedCount: boughtItemsByCanonicalName.size,
+            };
+          },
+        );
+
+        await sync();
+        return result;
       }),
 
     clearItems: async (): Promise<void> =>
@@ -1682,21 +2212,38 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
 
         await shoppingDatabase.transaction(
           "rw",
-          [shoppingDatabase.categories, shoppingDatabase.items, shoppingDatabase.productMemory],
+          [
+            shoppingDatabase.categories,
+            shoppingDatabase.items,
+            shoppingDatabase.productMemory,
+            shoppingDatabase.pantryItems,
+            shoppingDatabase.purchaseEvents,
+            shoppingDatabase.templates,
+          ],
           async () => {
             await shoppingDatabase.categories.delete(categoryId);
+            const currentTimestamp = Date.now();
             const items = await shoppingDatabase.items.where("categoryId").equals(categoryId).toArray();
             const memories = await shoppingDatabase.productMemory
               .where("categoryId")
               .equals(categoryId)
               .toArray();
+            const pantryItems = await shoppingDatabase.pantryItems
+              .where("categoryId")
+              .equals(categoryId)
+              .toArray();
+            const purchaseEvents = await shoppingDatabase.purchaseEvents
+              .where("categoryId")
+              .equals(categoryId)
+              .toArray();
+            const templates = await shoppingDatabase.templates.toArray();
 
             await Promise.all([
               ...items.map((item) =>
                 shoppingDatabase.items.put({
                   ...item,
                   categoryId: fallbackCategoryId,
-                  updatedAt: Date.now(),
+                  updatedAt: currentTimestamp,
                 }),
               ),
               ...memories.map((memory) =>
@@ -1705,6 +2252,38 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
                   categoryId: fallbackCategoryId,
                 }),
               ),
+              ...pantryItems.map((item) =>
+                shoppingDatabase.pantryItems.put({
+                  ...item,
+                  categoryId: fallbackCategoryId,
+                  updatedAt: currentTimestamp,
+                }),
+              ),
+              ...purchaseEvents.map((purchaseEvent) =>
+                shoppingDatabase.purchaseEvents.put({
+                  ...purchaseEvent,
+                  categoryId: fallbackCategoryId,
+                }),
+              ),
+              ...templates.map((template) => {
+                const hasDeletedCategory = template.items.some(
+                  (templateItem) => templateItem.categoryId === categoryId,
+                );
+
+                if (!hasDeletedCategory) {
+                  return Promise.resolve(template.id);
+                }
+
+                return shoppingDatabase.templates.put({
+                  ...template,
+                  items: template.items.map((templateItem) =>
+                    templateItem.categoryId === categoryId
+                      ? { ...templateItem, categoryId: fallbackCategoryId }
+                      : templateItem,
+                  ),
+                  updatedAt: currentTimestamp,
+                });
+              }),
             ]);
           },
         );
@@ -1736,13 +2315,14 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
         const snapshot = await readShoppingDatabaseSnapshot();
 
         return {
-          version: 3,
+          version: 4,
           exportedAt: Date.now(),
           categories: snapshot.categories,
           items: snapshot.items,
           shoppingListMeta: snapshot.shoppingListMeta,
           priceObservations: snapshot.priceObservations,
           productMemory: snapshot.productMemory,
+          pantryItems: snapshot.pantryItems,
           templates: snapshot.templates,
           settings: [snapshot.settings],
           purchaseEvents: snapshot.purchaseEvents,
@@ -1752,60 +2332,9 @@ export const useShoppingStore = create<ShoppingStoreState>((set, get) => {
     importData: async (data: unknown): Promise<void> =>
       runWithError(async () => {
         await ensureReady();
-        const backup = parseBackup(data);
+        const backup = parseShoppingBackup(data);
 
-        await shoppingDatabase.transaction(
-          "rw",
-          [
-            shoppingDatabase.categories,
-            shoppingDatabase.items,
-            shoppingDatabase.templates,
-            shoppingDatabase.settings,
-            shoppingDatabase.purchaseEvents,
-            shoppingDatabase.productMemory,
-            shoppingDatabase.shoppingListMeta,
-            shoppingDatabase.priceObservations,
-          ],
-          async () => {
-            await Promise.all([
-              shoppingDatabase.categories.clear(),
-              shoppingDatabase.items.clear(),
-              shoppingDatabase.templates.clear(),
-              shoppingDatabase.settings.clear(),
-              shoppingDatabase.purchaseEvents.clear(),
-              shoppingDatabase.productMemory.clear(),
-              shoppingDatabase.shoppingListMeta.clear(),
-              shoppingDatabase.priceObservations.clear(),
-            ]);
-
-            if (backup.categories.length > 0) {
-              await shoppingDatabase.categories.bulkPut(backup.categories);
-            }
-            if (backup.items.length > 0) {
-              await shoppingDatabase.items.bulkPut(backup.items);
-            }
-            if (backup.shoppingListMeta.length > 0) {
-              await shoppingDatabase.shoppingListMeta.bulkPut(backup.shoppingListMeta);
-            }
-            if (backup.priceObservations.length > 0) {
-              await shoppingDatabase.priceObservations.bulkPut(backup.priceObservations);
-            }
-            if (backup.productMemory.length > 0) {
-              await shoppingDatabase.productMemory.bulkPut(backup.productMemory);
-            }
-            if (backup.templates.length > 0) {
-              await shoppingDatabase.templates.bulkPut(backup.templates);
-            }
-            if (backup.settings.length > 0) {
-              await shoppingDatabase.settings.bulkPut(backup.settings);
-            }
-            if (backup.purchaseEvents.length > 0) {
-              await shoppingDatabase.purchaseEvents.bulkPut(backup.purchaseEvents);
-            }
-          },
-        );
-
-        await ensureDatabaseDefaults();
+        await replaceShoppingDatabase(backup);
         await sync();
       }),
 

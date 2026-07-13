@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   Apple,
@@ -34,15 +34,16 @@ import type {
   ShoppingCategory,
   ShoppingItem,
   ShoppingListMeta,
+  PriceObservation,
   ShoppingSettings,
 } from "../../domain/types";
 import { formatQuantity } from "../../lib/format";
 import {
   getProductPriceStats,
+  groupPriceObservationsByProduct,
   type BudgetStatus,
   type BudgetSummary,
 } from "../../pricing";
-import { useShoppingStore } from "../../store/useShoppingStore";
 import {
   formatMinorCurrency,
   formatMinorRange,
@@ -76,8 +77,10 @@ const getCategoryIcon = (categoryId: string): LucideIcon =>
 
 export const ShoppingListScreen = ({
   items,
+  categories,
   settings,
   listMeta,
+  priceObservations,
   budgetSummary,
   onAddText,
   onToggleItem,
@@ -91,13 +94,15 @@ export const ShoppingListScreen = ({
   onReviewBudget,
 }: {
   items: ShoppingItem[];
+  categories: ShoppingCategory[];
   settings: ShoppingSettings;
   listMeta?: ShoppingListMeta;
+  priceObservations: PriceObservation[];
   budgetSummary: BudgetSummary | null;
   onAddText: (input: string) => Promise<void>;
   onToggleItem: (itemId: string) => Promise<unknown>;
   onDeleteItem: (itemId: string) => Promise<void>;
-  onClearBought: () => Promise<void>;
+  onClearBought: () => void;
   onClearList: () => void;
   onCopyList: () => Promise<void>;
   onOpenShoppingMode: () => void;
@@ -110,8 +115,19 @@ export const ShoppingListScreen = ({
   const activeItems = settings.hideBoughtItems
     ? items.filter((item) => !item.isBought)
     : items;
-  const groupedItems = groupItems(activeItems, settings.groupByCategory, language);
+  const groupedItems = groupItems(
+    activeItems,
+    settings.groupByCategory,
+    language,
+    categories,
+  );
+  const priceObservationsByProduct = useMemo(
+    () => groupPriceObservationsByProduct(priceObservations),
+    [priceObservations],
+  );
   const progress = items.length > 0 ? Math.round((boughtItemsCount / items.length) * 100) : 0;
+  const arePurchasedItemsHidden =
+    settings.hideBoughtItems && items.length > 0 && boughtItemsCount === items.length;
 
   return (
     <div className="list-screen">
@@ -191,7 +207,7 @@ export const ShoppingListScreen = ({
             <button
               className="action-chip action-chip-clear"
               type="button"
-              onClick={() => runAsyncAction(onClearBought())}
+              onClick={onClearBought}
             >
               <ArchiveRestore size={15} />
               {copy.list.clearPurchased}
@@ -202,13 +218,20 @@ export const ShoppingListScreen = ({
       <AddItemBar onAddText={onAddText} />
       <section className="section-panel panel">
         {activeItems.length === 0 ? (
-          <EmptyList onAddText={onAddText} />
+          arePurchasedItemsHidden ? (
+            <PurchasedListState />
+          ) : (
+            <EmptyList onAddText={onAddText} />
+          )
         ) : (
           groupedItems.map((group) => (
             <CategorySection
               key={group.category.id}
               category={group.category}
+              categories={categories}
               items={group.items}
+              listMeta={listMeta}
+              priceObservationsByProduct={priceObservationsByProduct}
               onToggleItem={onToggleItem}
               onDeleteItem={onDeleteItem}
               onOpenCategory={onOpenCategory}
@@ -216,6 +239,22 @@ export const ShoppingListScreen = ({
           ))
         )}
       </section>
+    </div>
+  );
+};
+
+const PurchasedListState = () => {
+  const { copy } = useLocalization();
+
+  return (
+    <div className="empty-state">
+      <div className="empty-state-inner">
+        <div className="empty-icon">
+          <Check size={28} />
+        </div>
+        <h2>{copy.list.allPurchasedTitle}</h2>
+        <p>{copy.list.allPurchasedDescription}</p>
+      </div>
     </div>
   );
 };
@@ -384,7 +423,7 @@ export const AddItemBar = ({
         className="add-submit"
         type="submit"
         aria-label={copy.list.addItems}
-        disabled={isAdding}
+        disabled={!input.trim() || isAdding}
       >
         {isAdding ? <RefreshCw size={20} className="spin" /> : <Plus size={23} />}
       </button>
@@ -394,14 +433,20 @@ export const AddItemBar = ({
 
 export const CategorySection = ({
   category,
+  categories,
   items,
+  listMeta,
+  priceObservationsByProduct,
   onToggleItem,
   onDeleteItem,
   onOpenCategory,
   isShoppingMode = false,
 }: {
   category: ShoppingCategory;
+  categories: ShoppingCategory[];
   items: ShoppingItem[];
+  listMeta?: ShoppingListMeta;
+  priceObservationsByProduct: ReadonlyMap<string, PriceObservation[]>;
   onToggleItem: (itemId: string) => Promise<unknown>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onOpenCategory: (item: ShoppingItem) => void;
@@ -425,6 +470,11 @@ export const CategorySection = ({
           <ShoppingItemRow
             key={item.id}
             item={item}
+            categories={categories}
+            listMeta={listMeta}
+            priceObservations={
+              priceObservationsByProduct.get(item.normalizedName) ?? []
+            }
             isShoppingMode={isShoppingMode}
             onToggleItem={onToggleItem}
             onDeleteItem={onDeleteItem}
@@ -438,22 +488,24 @@ export const CategorySection = ({
 
 export const ShoppingItemRow = ({
   item,
+  categories,
+  listMeta,
+  priceObservations,
   isShoppingMode,
   onToggleItem,
   onDeleteItem,
   onOpenCategory,
 }: {
   item: ShoppingItem;
+  categories: ShoppingCategory[];
+  listMeta?: ShoppingListMeta;
+  priceObservations: PriceObservation[];
   isShoppingMode: boolean;
   onToggleItem: (itemId: string) => Promise<unknown>;
   onDeleteItem: (itemId: string) => Promise<void>;
   onOpenCategory: (item: ShoppingItem) => void;
 }) => {
   const { copy, language } = useLocalization();
-  const priceObservations = useShoppingStore((state) => state.priceObservations);
-  const listMeta = useShoppingStore((state) =>
-    state.shoppingListMeta.find((meta) => meta.shoppingListId === item.shoppingListId),
-  );
   const priceStats = listMeta
     ? getProductPriceStats(
         {
@@ -488,7 +540,7 @@ export const ShoppingItemRow = ({
         <span className="item-copy">
           <span className="item-name">{item.name}</span>
           <span className="item-meta">
-            {formatQuantity(item.quantity, item.unit, language)} · {getCategory(item.categoryId, language).name}
+            {formatQuantity(item.quantity, item.unit, language)} · {getCategory(item.categoryId, language, categories).name}
           </span>
           {priceStats && (
             <span className="item-price">

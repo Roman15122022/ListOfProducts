@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { motion } from "framer-motion";
+import { createPortal } from "react-dom";
 import { Minus, Pencil, Plus, Trash2, Wallet } from "lucide-react";
 
 import { useLocalization } from "../../contexts/LocalizationContext/useLocalization";
-import { defaultCategories } from "../../data/catalog";
 import type {
   CurrencyCode,
   ItemNecessity,
   PriceObservation,
+  ShoppingCategory,
   ShoppingItem,
   ShoppingListMeta,
   ShoppingUnit,
@@ -28,10 +28,12 @@ import {
   runAsyncAction,
 } from "../../utils/shopping";
 import { BudgetSummaryBar } from "../ShoppingList";
-import { Toggle } from "../../pages/SecondaryScreens";
+import { Toggle } from "../../components/Toggle";
+import { useModalFocusTrap } from "../../hooks/useModalFocusTrap";
 
 export const CategoryDialog = ({
   item,
+  categories,
   currency,
   priceStats,
   onClose,
@@ -41,6 +43,7 @@ export const CategoryDialog = ({
   onAddPrice,
 }: {
   item: ShoppingItem;
+  categories: ShoppingCategory[];
   currency: CurrencyCode;
   priceStats: ProductPriceStats | null;
   onClose: () => void;
@@ -135,11 +138,12 @@ export const CategoryDialog = ({
         <div className="dialog-section">
           <h3>{copy.categoryDialog.categoryTitle}</h3>
           <div className="category-options">
-            {defaultCategories.map((category) => (
+            {categories.map((category) => (
               <button
                 key={category.id}
                 className={`category-option ${category.id === item.categoryId ? "is-active" : ""}`}
                 type="button"
+                aria-pressed={category.id === item.categoryId}
                 onClick={() => runAsyncAction(onSelect(category.id))}
               >
                 {getCategory(category.id, language).name}
@@ -285,7 +289,6 @@ export const BudgetDialog = ({
               type="text"
               inputMode="decimal"
               value={amount}
-              autoFocus
               onChange={(event) => setAmount(event.target.value)}
             />
           </label>
@@ -422,7 +425,6 @@ export const PriceDialog = ({
               type="text"
               inputMode="decimal"
               value={amount}
-              autoFocus
               onChange={(event) => setAmount(event.target.value)}
             />
           </label>
@@ -648,20 +650,40 @@ export const ConfirmDialog = ({
   onConfirm: () => Promise<void>;
 }) => {
   const { copy } = useLocalization();
+  const [isConfirming, setConfirming] = useState(false);
+
+  const confirm = async () => {
+    if (isConfirming) {
+      return;
+    }
+
+    setConfirming(true);
+    try {
+      await onConfirm();
+    } finally {
+      setConfirming(false);
+    }
+  };
 
   return (
-    <DialogFrame onClose={onCancel}>
+    <DialogFrame onClose={() => !isConfirming && onCancel()}>
       <div className="dialog-content">
         <h2 id="dialog-title">{title}</h2>
         <p id="dialog-description">{description}</p>
         <div className="dialog-actions">
-          <button className="button button-quiet" type="button" onClick={onCancel}>
+          <button
+            className="button button-quiet"
+            type="button"
+            disabled={isConfirming}
+            onClick={onCancel}
+          >
             {copy.common.cancel}
           </button>
           <button
             className="button button-danger"
             type="button"
-            onClick={() => runAsyncAction(onConfirm())}
+            disabled={isConfirming}
+            onClick={() => runAsyncAction(confirm())}
           >
             {confirmLabel}
           </button>
@@ -679,68 +701,11 @@ export const DialogFrame = ({
   onClose: () => void;
 }) => {
   const dialogReference = useRef<HTMLElement | null>(null);
+  useModalFocusTrap(dialogReference, onClose);
 
-  useEffect(() => {
-    const dialogElement = dialogReference.current;
-    const previouslyFocusedElement = document.activeElement as HTMLElement | null;
-
-    if (!dialogElement) {
-      return undefined;
-    }
-
-    const getFocusableElements = () =>
-      Array.from(
-        dialogElement.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-        ),
-      );
-
-    getFocusableElements()[0]?.focus();
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        onClose();
-        return;
-      }
-
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const focusableElements = getFocusableElements();
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-
-      if (!firstElement || !lastElement) {
-        event.preventDefault();
-        return;
-      }
-
-      if (event.shiftKey && document.activeElement === firstElement) {
-        event.preventDefault();
-        lastElement.focus();
-      } else if (!event.shiftKey && document.activeElement === lastElement) {
-        event.preventDefault();
-        firstElement.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown, true);
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown, true);
-      previouslyFocusedElement?.focus();
-    };
-  }, [onClose]);
-
-  return (
-    <motion.div
+  return createPortal(
+    <div
       className="overlay"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
@@ -748,19 +713,17 @@ export const DialogFrame = ({
         }
       }}
     >
-      <motion.section
+      <section
         ref={dialogReference}
         className="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
         aria-describedby="dialog-description"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 20 }}
       >
         {children}
-      </motion.section>
-    </motion.div>
+      </section>
+    </div>,
+    document.body,
   );
 };

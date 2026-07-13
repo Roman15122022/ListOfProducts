@@ -3,7 +3,8 @@ import type { LucideIcon } from "lucide-react";
 import type { ShoppingItem, ShoppingSettings } from "../domain/types";
 import type { AppCopy, DisplayLanguage } from "../lib/localization";
 
-export type ScreenId = "list" | "suggestions" | "templates" | "history" | "settings";
+export type ScreenId = "list" | "suggestions" | "pantry" | "history" | "settings";
+export type AppInstallState = "available" | "ios" | "installed" | "unavailable";
 
 export type ShoppingSettingsUpdate = Partial<
   Omit<ShoppingSettings, "id" | "updatedAt">

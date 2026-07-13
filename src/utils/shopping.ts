@@ -19,17 +19,23 @@ export const runAsyncAction = (action: Promise<unknown>): void => {
 };
 
 export const getCurrentShoppingListId = (items: ShoppingItem[]): string | undefined => {
-  const activeItem = [...items]
-    .filter((item) => !item.isBought)
-    .sort((firstItem, secondItem) => secondItem.updatedAt - firstItem.updatedAt)[0];
+  let latestItem: ShoppingItem | undefined;
+  let latestActiveItem: ShoppingItem | undefined;
 
-  if (activeItem) {
-    return activeItem.shoppingListId;
+  for (const item of items) {
+    if (!latestItem || item.updatedAt > latestItem.updatedAt) {
+      latestItem = item;
+    }
+
+    if (
+      !item.isBought &&
+      (!latestActiveItem || item.updatedAt > latestActiveItem.updatedAt)
+    ) {
+      latestActiveItem = item;
+    }
   }
 
-  return [...items].sort(
-    (firstItem, secondItem) => secondItem.updatedAt - firstItem.updatedAt,
-  )[0]?.shoppingListId;
+  return (latestActiveItem ?? latestItem)?.shoppingListId;
 };
 
 export const formatMinorCurrency = (
@@ -92,14 +98,27 @@ export const getPriceReferenceUnit = (unit: ShoppingUnit): ShoppingUnit => {
 export const getCategory = (
   categoryId: string,
   language: DisplayLanguage,
+  categories: readonly ShoppingCategory[] = defaultCategories,
 ): ShoppingCategory => {
-  const category =
-    defaultCategories.find((candidate) => candidate.id === categoryId) ??
-    defaultCategories[defaultCategories.length - 1];
+  const category = categories.find((candidate) => candidate.id === categoryId);
+
+  if (category) {
+    return {
+      ...category,
+      name: getLocalizedCategoryName(category.id, category.name, language),
+    };
+  }
+
+  const fallbackCategory = defaultCategories[defaultCategories.length - 1];
 
   return {
-    ...category,
-    name: getLocalizedCategoryName(category.id, category.name, language),
+    ...fallbackCategory,
+    id: categoryId || fallbackCategory.id,
+    name: getLocalizedCategoryName(
+      categoryId,
+      categoryId || fallbackCategory.name,
+      language,
+    ),
   };
 };
 
@@ -107,6 +126,7 @@ export const groupItems = (
   items: ShoppingItem[],
   isGrouped: boolean,
   language: DisplayLanguage,
+  categories: readonly ShoppingCategory[] = defaultCategories,
 ): Array<{ category: ShoppingCategory; items: ShoppingItem[] }> => {
   if (!isGrouped) {
     return [
@@ -132,7 +152,7 @@ export const groupItems = (
 
   return [...itemsByCategory.entries()]
     .map(([categoryId, categoryItems]) => ({
-      category: getCategory(categoryId, language),
+      category: getCategory(categoryId, language, categories),
       items: categoryItems.sort((firstItem, secondItem) => {
         if (firstItem.isBought !== secondItem.isBought) {
           return Number(firstItem.isBought) - Number(secondItem.isBought);

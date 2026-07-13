@@ -3,6 +3,7 @@ export {
   getActualTotalsByList,
   getBudgetSummary,
   getProductPriceStats,
+  groupPriceObservationsByProduct,
 } from "./calculations";
 export type {
   ActualListTotal,

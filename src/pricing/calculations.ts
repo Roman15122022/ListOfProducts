@@ -65,6 +65,21 @@ interface PriceTarget {
 const normalizeProductName = (value: string): string =>
   value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
+export const groupPriceObservationsByProduct = (
+  observations: readonly PriceObservation[],
+): Map<string, PriceObservation[]> => {
+  const observationsByProduct = new Map<string, PriceObservation[]>();
+
+  for (const observation of observations) {
+    const normalizedName = normalizeProductName(observation.normalizedName);
+    const productObservations = observationsByProduct.get(normalizedName) ?? [];
+    productObservations.push(observation);
+    observationsByProduct.set(normalizedName, productObservations);
+  }
+
+  return observationsByProduct;
+};
+
 const getManualObservations = (
   target: PriceTarget,
   observations: readonly PriceObservation[],
@@ -147,23 +162,6 @@ export const getProductPriceStats = (
   };
 };
 
-const getActualObservation = (
-  item: ShoppingItem,
-  observations: readonly PriceObservation[],
-  currency: CurrencyCode,
-): PriceObservation | undefined =>
-  observations
-    .filter(
-      (observation) =>
-        observation.source === "manual" &&
-        observation.currency === currency &&
-        observation.shoppingListId === item.shoppingListId &&
-        observation.itemId === item.id,
-    )
-    .sort((firstObservation, secondObservation) =>
-      secondObservation.observedAt - firstObservation.observedAt,
-    )[0];
-
 const getBudgetStatus = (
   lowAmountMinor: number,
   highAmountMinor: number,
@@ -198,8 +196,27 @@ export const getBudgetSummary = (
   const shoppingListItems = items.filter(
     (item) => item.shoppingListId === meta.shoppingListId,
   );
+  const observationsByProduct = groupPriceObservationsByProduct(observations);
+  const actualObservationsByItemId = new Map<string, PriceObservation>();
+
+  for (const observation of observations) {
+    if (
+      observation.source !== "manual" ||
+      observation.currency !== meta.currency ||
+      observation.shoppingListId !== meta.shoppingListId
+    ) {
+      continue;
+    }
+
+    const currentObservation = actualObservationsByItemId.get(observation.itemId);
+
+    if (!currentObservation || observation.observedAt > currentObservation.observedAt) {
+      actualObservationsByItemId.set(observation.itemId, observation);
+    }
+  }
+
   const itemEstimates = shoppingListItems.map<BudgetItemEstimate>((item) => {
-    const actualObservation = getActualObservation(item, observations, meta.currency);
+    const actualObservation = actualObservationsByItemId.get(item.id);
     const actualAmountMinor = actualObservation
       ? scalePriceAmountMinor(
           actualObservation.amountMinor,
@@ -222,7 +239,7 @@ export const getBudgetSummary = (
 
     const stats = getProductPriceStats(
       item,
-      observations,
+      observationsByProduct.get(normalizeProductName(item.normalizedName)) ?? [],
       meta.currency,
       meta.countryCode,
     );

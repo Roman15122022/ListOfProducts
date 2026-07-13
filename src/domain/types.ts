@@ -8,6 +8,33 @@ export type CurrencyCode = "UAH" | "USD" | "EUR" | "PLN";
 export type ItemNecessity = "required" | "optional";
 export type PriceObservationSource = "manual" | "provider";
 
+export const recipeDietLabels = [
+  "balanced",
+  "high-fiber",
+  "high-protein",
+  "low-carb",
+  "low-fat",
+  "low-sodium",
+] as const;
+
+export type RecipeDietLabel = (typeof recipeDietLabels)[number];
+
+export const recipeHealthLabels = [
+  "vegan",
+  "vegetarian",
+  "gluten-free",
+  "dairy-free",
+  "egg-free",
+  "peanut-free",
+  "tree-nut-free",
+  "soy-free",
+  "fish-free",
+  "shellfish-free",
+  "sesame-free",
+] as const;
+
+export type RecipeHealthLabel = (typeof recipeHealthLabels)[number];
+
 export interface ShoppingCategory {
   id: string;
   name: string;
@@ -56,6 +83,22 @@ export interface ShoppingListMeta {
   countryCode: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface PantryItem {
+  id: string;
+  name: string;
+  normalizedName: string;
+  canonicalName: string;
+  categoryId: string;
+  createdAt: number;
+  updatedAt: number;
+  lastPurchasedAt?: number;
+}
+
+export interface PantryItemInput {
+  name: string;
+  categoryId?: string;
 }
 
 export interface PriceObservation {
@@ -153,6 +196,8 @@ export interface ShoppingSettings {
   groupByCategory: boolean;
   enableAiSuggestions: boolean;
   enableLocalMlTraining: boolean;
+  recipeDiet: RecipeDietLabel | null;
+  recipeHealthLabels: RecipeHealthLabel[];
   currency: CurrencyCode;
   updatedAt: number;
 }
@@ -163,13 +208,14 @@ export interface ProductDictionaryEntry {
 }
 
 export interface ShoppingBackup {
-  version: 3;
+  version: 4;
   exportedAt: number;
   categories: ShoppingCategory[];
   items: ShoppingItem[];
   shoppingListMeta: ShoppingListMeta[];
   priceObservations: PriceObservation[];
   productMemory: ProductMemory[];
+  pantryItems: PantryItem[];
   templates: ShoppingTemplate[];
   settings: ShoppingSettings[];
   purchaseEvents: PurchaseEvent[];

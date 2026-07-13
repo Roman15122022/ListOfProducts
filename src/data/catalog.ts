@@ -342,6 +342,8 @@ export const createDefaultSettings = (timestamp: number): ShoppingSettings => ({
   groupByCategory: true,
   enableAiSuggestions: true,
   enableLocalMlTraining: false,
+  recipeDiet: null,
+  recipeHealthLabels: [],
   currency: "UAH",
   updatedAt: timestamp,
 });

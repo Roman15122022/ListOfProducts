@@ -2,14 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <meta name="theme-color" content="#0f766e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Shopping List" />
     <meta
       name="description"
       content="A fast, offline-ready shopping list."
     />
     <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
-    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <script>
+      try {
+        const themePreference = localStorage.getItem("shopping-theme-preference") ?? "system";
+        const activeTheme = themePreference === "system"
+          ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+          : themePreference;
+        document.documentElement.dataset.theme = activeTheme;
+        document.querySelector('meta[name="theme-color"]').content =
+          activeTheme === "dark" ? "#10221a" : "#0f766e";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
     <title>Smart Shopping List</title>
   </head>
   <body>

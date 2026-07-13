@@ -1,16 +1,23 @@
-import { useEffect } from "react";
-import { motion } from "framer-motion";
+import { useMemo, useRef } from "react";
 import { ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import { useLocalization } from "../../contexts/LocalizationContext/useLocalization";
-import type { ShoppingItem, ShoppingListMeta } from "../../domain/types";
-import type { BudgetSummary } from "../../pricing";
+import type {
+  PriceObservation,
+  ShoppingCategory,
+  ShoppingItem,
+  ShoppingListMeta,
+} from "../../domain/types";
+import { groupPriceObservationsByProduct, type BudgetSummary } from "../../pricing";
 import { groupItems } from "../../utils/shopping";
 import { BudgetSummaryBar, CategorySection } from "../ShoppingList";
+import { useModalFocusTrap } from "../../hooks/useModalFocusTrap";
 
 export const ShoppingMode = ({
   items,
+  categories,
   listMeta,
+  priceObservations,
   budgetSummary,
   showBought,
   onClose,
@@ -21,7 +28,9 @@ export const ShoppingMode = ({
   onReviewBudget,
 }: {
   items: ShoppingItem[];
+  categories: ShoppingCategory[];
   listMeta?: ShoppingListMeta;
+  priceObservations: PriceObservation[];
   budgetSummary: BudgetSummary | null;
   showBought: boolean;
   onClose: () => void;
@@ -34,29 +43,22 @@ export const ShoppingMode = ({
   const { copy, language } = useLocalization();
   const boughtItemsCount = items.filter((item) => item.isBought).length;
   const modeItems = showBought ? items : items.filter((item) => !item.isBought);
-  const groupedItems = groupItems(modeItems, true, language);
+  const groupedItems = groupItems(modeItems, true, language, categories);
+  const priceObservationsByProduct = useMemo(
+    () => groupPriceObservationsByProduct(priceObservations),
+    [priceObservations],
+  );
   const progress = items.length > 0 ? Math.round((boughtItemsCount / items.length) * 100) : 0;
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  const shoppingModeReference = useRef<HTMLElement | null>(null);
+  useModalFocusTrap(shoppingModeReference, onClose);
 
   return (
-    <motion.section
+    <section
+      ref={shoppingModeReference}
       className="shopping-mode"
       role="dialog"
       aria-modal="true"
       aria-labelledby="shopping-mode-title"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
     >
       <div className="shopping-mode-frame">
         <header className="shopping-mode-head">
@@ -128,7 +130,10 @@ export const ShoppingMode = ({
               <CategorySection
                 key={group.category.id}
                 category={group.category}
+                categories={categories}
                 items={group.items}
+                listMeta={listMeta}
+                priceObservationsByProduct={priceObservationsByProduct}
                 isShoppingMode
                 onToggleItem={onToggleItem}
                 onDeleteItem={onDeleteItem}
@@ -138,6 +143,6 @@ export const ShoppingMode = ({
           )}
         </section>
       </div>
-    </motion.section>
+    </section>
   );
 };

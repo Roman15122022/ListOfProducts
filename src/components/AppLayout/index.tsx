@@ -26,6 +26,21 @@ export const LoadingState = () => {
   );
 };
 
+export const ScreenLoadingState = () => {
+  const { copy } = useLocalization();
+
+  return (
+    <div className="secondary-screen">
+      <section className="panel empty-state" role="status">
+        <div className="empty-state-inner">
+          <h2>{copy.app.loadingTitle}</h2>
+          <p>{copy.app.loadingDescription}</p>
+        </div>
+      </section>
+    </div>
+  );
+};
+
 export const ErrorState = ({ onRetry }: { onRetry: () => void }) => {
   const { copy } = useLocalization();
 
@@ -88,6 +103,7 @@ export const DesktopNavigation = ({
               key={item.id}
               className={`nav-item ${activeScreen === item.id ? "active" : ""}`}
               type="button"
+              aria-current={activeScreen === item.id ? "page" : undefined}
               onClick={() => onSelect(item.id)}
             >
               <Icon size={19} />
@@ -125,6 +141,7 @@ export const BottomNavigation = ({
             key={item.id}
             className={`nav-item ${activeScreen === item.id ? "active" : ""}`}
             type="button"
+            aria-current={activeScreen === item.id ? "page" : undefined}
             onClick={() => onSelect(item.id)}
           >
             <Icon aria-hidden="true" />
@@ -154,8 +171,14 @@ export const TopBar = ({
       <Brand />
       <div className="topbar-actions">
         {!isOnline && (
-          <span className="offline-dot" title={copy.common.offline} aria-label={copy.common.offline}>
-            <WifiOff size={0} />
+          <span
+            className="offline-badge"
+            title={copy.common.offline}
+            role="status"
+            aria-live="polite"
+          >
+            <WifiOff size={14} />
+            {copy.common.offline}
           </span>
         )}
         {activeScreen === "list" && (

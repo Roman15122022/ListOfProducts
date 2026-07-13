@@ -1,9 +1,6 @@
-import { useState, type ChangeEvent, type ReactNode } from "react";
+import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import {
-  Beef,
   BellRing,
-  Carrot,
-  Egg,
   FileDown,
   FileUp,
   History,
@@ -21,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { useLocalization } from "../../contexts/LocalizationContext/useLocalization";
+import { Toggle } from "../../components/Toggle";
 import type {
   CurrencyCode,
   PriceObservation,
@@ -32,29 +30,13 @@ import type {
 import { formatQuantity, formatTime } from "../../lib/format";
 import { getLocalizedStarterTemplate, type DisplayLanguage } from "../../lib/localization";
 import { getActualListTotal } from "../../pricing";
-import type { ShoppingSettingsUpdate } from "../../types/app";
+import type { AppInstallState, ShoppingSettingsUpdate } from "../../types/app";
 import {
   formatMinorCurrency,
   getFrequentProducts,
   getHistoryGroups,
   runAsyncAction,
 } from "../../utils/shopping";
-
-const getTemplateIcon = (templateId: string): LucideIcon => {
-  if (templateId === "starter-borscht") {
-    return Carrot;
-  }
-
-  if (templateId === "starter-breakfast") {
-    return Egg;
-  }
-
-  if (templateId === "starter-gym") {
-    return Beef;
-  }
-
-  return ShoppingBasket;
-};
 
 export const SuggestionsScreen = ({
   templates,
@@ -78,12 +60,29 @@ export const SuggestionsScreen = ({
     hasPurchaseHistory
       ? frequentProducts
       : copy.quickProducts.map((item) => item.split(" ")[0]);
-  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
   const breakfastTemplate =
     templates.find((template) => template.id === "starter-breakfast") ?? templates[0];
   const localizedBreakfastTemplate = breakfastTemplate
     ? getLocalizedStarterTemplate(breakfastTemplate, language)
     : undefined;
+
+  const toggleSelectedProduct = (product: string) => {
+    setSelectedProducts((currentProducts) =>
+      currentProducts.includes(product)
+        ? currentProducts.filter((currentProduct) => currentProduct !== product)
+        : [...currentProducts, product],
+    );
+  };
+
+  const addSelectedProducts = async () => {
+    if (selectedProducts.length === 0) {
+      return;
+    }
+
+    await onAddText(selectedProducts.join(", "));
+    setSelectedProducts([]);
+  };
 
   return (
     <div className="secondary-screen">
@@ -132,10 +131,10 @@ export const SuggestionsScreen = ({
               {shownProducts.map((product) => (
                 <button
                   key={product}
-                  className={`suggested-product-button ${selectedProduct === product ? "is-selected" : ""}`}
+                  className={`suggested-product-button ${selectedProducts.includes(product) ? "is-selected" : ""}`}
                   type="button"
-                  aria-pressed={selectedProduct === product}
-                  onClick={() => setSelectedProduct(product)}
+                  aria-pressed={selectedProducts.includes(product)}
+                  onClick={() => toggleSelectedProduct(product)}
                 >
                   {product}
                 </button>
@@ -144,11 +143,12 @@ export const SuggestionsScreen = ({
             <button
               className="button button-primary"
               type="button"
-              disabled={!selectedProduct}
-              onClick={() => selectedProduct && runAsyncAction(onAddText(selectedProduct))}
+              disabled={selectedProducts.length === 0}
+              onClick={() => runAsyncAction(addSelectedProducts())}
             >
               <Plus size={17} />
               {copy.suggestions.addToList}
+              {selectedProducts.length > 0 && ` (${selectedProducts.length})`}
             </button>
           </section>
           {localizedBreakfastTemplate && (
@@ -195,53 +195,6 @@ export const SuggestionsScreen = ({
 };
 
 export const Clock3Icon = () => <History size={19} />;
-
-export const TemplatesScreen = ({
-  templates,
-  onApplyTemplate,
-}: {
-  templates: ShoppingTemplate[];
-  onApplyTemplate: (template: ShoppingTemplate) => Promise<void>;
-}) => {
-  const { copy, language } = useLocalization();
-
-  return (
-    <div className="secondary-screen">
-      <section className="screen-heading panel">
-        <p className="eyebrow">{copy.templates.eyebrow}</p>
-        <h1>{copy.templates.title}</h1>
-        <p>{copy.templates.subtitle}</p>
-      </section>
-      <div className="template-grid">
-        {templates.map((template) => {
-          const localizedTemplate = getLocalizedStarterTemplate(template, language);
-          const Icon = getTemplateIcon(template.id);
-
-          return (
-            <section className="template-card panel" key={template.id}>
-              <div className="template-card-top">
-                <span className="template-icon">
-                  <Icon size={20} />
-                </span>
-                <span className="category-count">{localizedTemplate.items.length}</span>
-              </div>
-              <h2>{localizedTemplate.name}</h2>
-              <p>{localizedTemplate.items.map((item) => item.name).join(" · ")}</p>
-              <button
-                className="button button-secondary"
-                type="button"
-                onClick={() => runAsyncAction(onApplyTemplate(localizedTemplate))}
-              >
-                <Plus size={17} />
-                {copy.templates.addItems}
-              </button>
-            </section>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
 
 export const HistoryScreen = ({
   purchaseEvents,
@@ -343,7 +296,7 @@ export const HistoryScreen = ({
 
 export const SettingsScreen = ({
   settings,
-  canInstall,
+  installState,
   onUpdateSettings,
   onInstall,
   onExport,
@@ -351,7 +304,7 @@ export const SettingsScreen = ({
   onReset,
 }: {
   settings: ShoppingSettings;
-  canInstall: boolean;
+  installState: AppInstallState;
   onUpdateSettings: (settingsUpdate: ShoppingSettingsUpdate) => Promise<unknown>;
   onInstall: () => Promise<void>;
   onExport: () => Promise<void>;
@@ -359,6 +312,13 @@ export const SettingsScreen = ({
   onReset: () => void;
 }) => {
   const { copy, language } = useLocalization();
+  const importInputReference = useRef<HTMLInputElement | null>(null);
+  const installDescription: Record<AppInstallState, string> = {
+    available: copy.settings.installAvailable,
+    ios: copy.settings.installIos,
+    installed: copy.settings.installInstalled,
+    unavailable: copy.settings.installUnavailable,
+  };
 
   return (
     <div className="secondary-screen">
@@ -446,18 +406,20 @@ export const SettingsScreen = ({
           <div className="settings-card panel">
             <SettingLine
               title={copy.settings.installApp}
-              description={
-                canInstall ? copy.settings.installAvailable : copy.settings.installUnavailable
-              }
+              description={installDescription[installState]}
             >
-              <button
-                className="small-button"
-                type="button"
-                onClick={() => runAsyncAction(onInstall())}
-              >
-                <PanelTopOpen size={15} />
-                {copy.settings.install}
-              </button>
+              {(installState === "available" || installState === "ios") && (
+                <button
+                  className="small-button"
+                  type="button"
+                  onClick={() => runAsyncAction(onInstall())}
+                >
+                  <PanelTopOpen size={15} />
+                  {installState === "ios"
+                    ? copy.settings.installHelp
+                    : copy.settings.install}
+                </button>
+              )}
             </SettingLine>
             <SettingLine title={copy.settings.exportData} description={copy.settings.exportDescription}>
               <button
@@ -470,17 +432,24 @@ export const SettingsScreen = ({
               </button>
             </SettingLine>
             <SettingLine title={copy.settings.importData} description={copy.settings.importDescription}>
-              <label className="small-button" htmlFor="import-shopping-list">
-                <FileUp size={15} />
-                {copy.settings.import}
+              <>
+                <button
+                  className="small-button"
+                  type="button"
+                  onClick={() => importInputReference.current?.click()}
+                >
+                  <FileUp size={15} />
+                  {copy.settings.import}
+                </button>
                 <input
+                  ref={importInputReference}
                   id="import-shopping-list"
                   type="file"
                   accept="application/json"
                   hidden
                   onChange={(event) => void onImport(event)}
                 />
-              </label>
+              </>
             </SettingLine>
             <SettingLine title={copy.settings.clearData} description={copy.settings.clearDataDescription}>
               <button className="small-button button-danger" type="button" onClick={onReset}>
@@ -528,7 +497,7 @@ export const ThemeSelector = ({
   ];
 
   return (
-    <div className="segmented-control" aria-label={copy.settings.themeLabel}>
+    <div className="segmented-control" role="group" aria-label={copy.settings.themeLabel}>
       {themeOptions.map((option) => {
         const Icon = option.icon;
         return (
@@ -538,6 +507,7 @@ export const ThemeSelector = ({
             type="button"
             title={option.label}
             aria-label={option.label}
+            aria-pressed={theme === option.id}
             onClick={() => onChange(option.id)}
           >
             <Icon size={15} />
@@ -577,7 +547,7 @@ export const LanguageSelector = ({
         aria-pressed={language === "uk"}
         onClick={() => onChange("uk")}
       >
-        UA
+        УКР
       </button>
     </div>
   );
@@ -608,22 +578,3 @@ export const CurrencySelector = ({
     </select>
   );
 };
-
-export const Toggle = ({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: () => void;
-}) => (
-  <button
-    className={`switch ${checked ? "is-on" : ""}`}
-    type="button"
-    role="switch"
-    aria-label={label}
-    aria-checked={checked}
-    onClick={onChange}
-  />
-);

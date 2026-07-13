@@ -1,14 +1,14 @@
 name: Deploy to GitHub Pages
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: github-pages
@@ -17,6 +17,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VITE_MEALDB_API_KEY: ${{ vars.MEALDB_API_KEY }}
+      VITE_BASE_PATH: /ListOfProducts/
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,16 +27,30 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm run test
+      - name: Audit high-severity vulnerabilities
+        run: npm audit --audit-level=high
       - name: Build
         run: npm run build
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
 
   deploy:
+    if: github.event_name != 'pull_request'
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

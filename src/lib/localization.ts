@@ -1,8 +1,17 @@
-import type { AppLanguage, ShoppingTemplate } from "../domain/types";
+import type {
+  AppLanguage,
+  ShoppingTemplate,
+} from "../domain/types";
 import { normalizeProductName } from "./parseShoppingInput";
 
 export type DisplayLanguage = "en" | "uk";
-export type NavigationKey = "list" | "suggestions" | "templates" | "history" | "settings";
+export type NavigationKey =
+  | "list"
+  | "suggestions"
+  | "templates"
+  | "pantry"
+  | "history"
+  | "settings";
 
 export type AppCopy = {
   navigation: Record<NavigationKey, string>;
@@ -45,6 +54,8 @@ export type AppCopy = {
     clearList: string;
     emptyTitle: string;
     emptyDescription: string;
+    allPurchasedTitle: string;
+    allPurchasedDescription: string;
     quickAdd: string;
     addItems: string;
     moveBack: (name: string) => string;
@@ -79,6 +90,61 @@ export type AppCopy = {
     subtitle: string;
     addItems: string;
   };
+  pantryRecipes: {
+    eyebrow: string;
+    title: string;
+    subtitle: string;
+    tabsLabel: string;
+    pantryTab: string;
+    recipesTab: string;
+    pantryTitle: string;
+    pantryDescription: string;
+    pantryCount: (count: number) => string;
+    addLabel: string;
+    addPlaceholder: string;
+    addHint: string;
+    addAction: string;
+    adding: string;
+    emptyPantryTitle: string;
+    emptyPantryDescription: string;
+    categoryCount: (count: number) => string;
+    deletePantryItem: (name: string) => string;
+    recipesTitle: string;
+    recipesDescription: string;
+    chooseIngredients: string;
+    chooseIngredientsHint: string;
+    selectedCount: (count: number) => string;
+    selectionLimit: string;
+    noEdibleTitle: string;
+    noEdibleDescription: string;
+    search: string;
+    searching: string;
+    offlineTitle: string;
+    offlineDescription: string;
+    idleTitle: string;
+    idleDescription: string;
+    emptyRecipesTitle: string;
+    emptyRecipesDescription: string;
+    errorTitle: string;
+    errorDescription: string;
+    retry: string;
+    recipesFound: (count: number) => string;
+    coverage: (percent: number) => string;
+    matchSummary: (matchedCount: number, missingCount: number) => string;
+    minutes: (count: number) => string;
+    servings: (count: number) => string;
+    viewRecipe: string;
+    ingredientsTitle: string;
+    ingredientsDescription: string;
+    available: string;
+    missing: string;
+    sourceRecipe: string;
+    sourceRecipeNewTab: string;
+    addSelected: (count: number) => string;
+    addingSelected: string;
+    nothingMissing: string;
+    closeRecipe: string;
+  };
   history: {
     eyebrow: string;
     title: string;
@@ -110,8 +176,11 @@ export type AppCopy = {
     data: string;
     installApp: string;
     installAvailable: string;
+    installIos: string;
+    installInstalled: string;
     installUnavailable: string;
     install: string;
+    installHelp: string;
     exportData: string;
     exportDescription: string;
     export: string;
@@ -205,8 +274,18 @@ export type AppCopy = {
     listCleared: string;
     installFromBrowser: string;
     appInstalled: string;
+    updateAvailable: string;
+    updateNow: string;
+    updateFailed: string;
+    offlineReady: string;
     categoryUpdated: string;
     purchased: (name: string) => string;
+    purchasedMoved: (count: number) => string;
+    pantryItemAdded: (count: number) => string;
+    pantryItemExists: string;
+    pantryItemRemoved: (name: string) => string;
+    recipeItemsAdded: (count: number) => string;
+    recipeItemsAlreadyListed: string;
     priceSaved: string;
     budgetSaved: string;
     budgetRemoved: string;
@@ -231,6 +310,7 @@ const englishCopy: AppCopy = {
     list: "List",
     suggestions: "Ideas",
     templates: "Templates",
+    pantry: "At home",
     history: "History",
     settings: "More",
   },
@@ -256,7 +336,7 @@ const englishCopy: AppCopy = {
     errorDescription: "Your local data is still safe. Try opening the list again.",
     retry: "Try again",
     primaryNavigation: "Primary navigation",
-    localData: "All data stays on this device.",
+    localData: "Your list and history stay on this device.",
     openShoppingMode: "Open shopping mode",
     shoppingMode: "Shopping mode",
     openSettings: "Open settings",
@@ -269,10 +349,12 @@ const englishCopy: AppCopy = {
     progress: (boughtCount, totalCount) => `${boughtCount} of ${totalCount}`,
     progressAria: (progress) => `${progress}% purchased`,
     copyList: "Copy list",
-    clearPurchased: "Clear purchased",
+    clearPurchased: "Move purchased home",
     clearList: "Clear list",
     emptyTitle: "Your list is ready",
     emptyDescription: "Write several items separated by commas, or start with a staple.",
+    allPurchasedTitle: "Everything is purchased",
+    allPurchasedDescription: "Move purchased products home or show them again in settings.",
     quickAdd: "Quick add",
     addItems: "Add items",
     moveBack: (name) => `Move ${name} back to the list`,
@@ -295,7 +377,7 @@ const englishCopy: AppCopy = {
     starterDescription: "A few common items to help start a new list.",
     addToList: "Add to list",
     readyEyebrow: "Ready-to-use list",
-    readyDescription: "Add this set now, or choose another one in Templates.",
+    readyDescription: "Add this familiar set to your shopping list in one tap.",
     addSet: "Add set",
     rhythmEyebrow: "Shopping rhythm",
     rhythmTitle: "Personal reminders will appear here",
@@ -306,6 +388,62 @@ const englishCopy: AppCopy = {
     title: "Shopping templates",
     subtitle: "Add a familiar set of items in one tap.",
     addItems: "Add items",
+  },
+  pantryRecipes: {
+    eyebrow: "Your kitchen",
+    title: "At home & recipes",
+    subtitle: "Keep track of what is available and find meals you can make with it.",
+    tabsLabel: "At home and recipes",
+    pantryTab: "Products at home",
+    recipesTab: "Recipes",
+    pantryTitle: "Products at home",
+    pantryDescription: "Purchased items appear here after you move them from the shopping list.",
+    pantryCount: (count) => `${count} ${count === 1 ? "product" : "products"} available`,
+    addLabel: "Add products at home",
+    addPlaceholder: "Milk, eggs, tomatoes",
+    addHint: "Separate several products with commas.",
+    addAction: "Add",
+    adding: "Adding…",
+    emptyPantryTitle: "Your kitchen is ready",
+    emptyPantryDescription: "Add what you already have, or clear purchased products from your list.",
+    categoryCount: (count) => `${count} ${count === 1 ? "product" : "products"}`,
+    deletePantryItem: (name) => `Remove ${name} from products at home`,
+    recipesTitle: "Cook with what you have",
+    recipesDescription: "Choose up to five products. Their names are sent to the recipe service only when you search.",
+    chooseIngredients: "Choose products",
+    chooseIngredientsHint: "Household and personal care products are not used for recipe search.",
+    selectedCount: (count) => `${count} of 5 selected`,
+    selectionLimit: "You can choose up to five products.",
+    noEdibleTitle: "Add a food product first",
+    noEdibleDescription: "Food from Products at home will become available for recipe search.",
+    search: "Find recipes",
+    searching: "Finding recipes…",
+    offlineTitle: "Recipe search is offline",
+    offlineDescription: "Your products remain available. Reconnect to search for new recipes.",
+    idleTitle: "Ready for a little inspiration?",
+    idleDescription: "Choose products, then start a search when you are ready.",
+    emptyRecipesTitle: "No matching recipes",
+    emptyRecipesDescription: "Try choosing another product or a smaller set.",
+    errorTitle: "Recipes could not be loaded",
+    errorDescription: "The recipe service may be busy. Your local products are not affected.",
+    retry: "Try again",
+    recipesFound: (count) => `${count} ${count === 1 ? "recipe" : "recipes"} found`,
+    coverage: (percent) => `${percent}% at home`,
+    matchSummary: (matchedCount, missingCount) =>
+      `${matchedCount} matched · ${missingCount} ${missingCount === 1 ? "item" : "items"} missing`,
+    minutes: (count) => `${Math.round(count)} min`,
+    servings: (count) => `${Math.round(count)} servings`,
+    viewRecipe: "View ingredients",
+    ingredientsTitle: "Ingredients",
+    ingredientsDescription: "Missing products are selected. Review them before adding to your list.",
+    available: "At home",
+    missing: "Need to buy",
+    sourceRecipe: "Open original recipe",
+    sourceRecipeNewTab: "Open original recipe in a new tab",
+    addSelected: (count) => `Add ${count} to list`,
+    addingSelected: "Adding to list…",
+    nothingMissing: "You already have everything listed for this recipe.",
+    closeRecipe: "Close recipe",
   },
   history: {
     eyebrow: "Your rhythm",
@@ -339,10 +477,13 @@ const englishCopy: AppCopy = {
     data: "Data",
     installApp: "Install app",
     installAvailable: "Add a shortcut to your home screen",
-    installUnavailable: "Available from your browser menu",
+    installIos: "Use Share, then Add to Home Screen",
+    installInstalled: "The app is already installed on this device",
+    installUnavailable: "Installation is not available in this browser",
     install: "Install",
+    installHelp: "How to install",
     exportData: "Export data",
-    exportDescription: "A JSON file with your list, history, and templates",
+    exportDescription: "A JSON file with your list, history, and products at home",
     export: "Export",
     importData: "Import data",
     importDescription: "Restore a saved backup",
@@ -432,10 +573,23 @@ const englishCopy: AppCopy = {
     importFailed: "Could not read this file",
     dataCleared: "Local data cleared",
     listCleared: "List cleared",
-    installFromBrowser: "Install the app from your browser menu",
+    installFromBrowser: "In Safari, tap Share, then Add to Home Screen",
     appInstalled: "App added to your device",
+    updateAvailable: "A new version is ready",
+    updateNow: "Update",
+    updateFailed: "The app update could not be completed. Please try again.",
+    offlineReady: "The app is ready to work offline",
     categoryUpdated: "Category updated",
     purchased: (name) => `${name} purchased`,
+    purchasedMoved: (count) =>
+      `${count} purchased ${count === 1 ? "product" : "products"} moved home`,
+    pantryItemAdded: (count) =>
+      `${count} ${count === 1 ? "product" : "products"} added at home`,
+    pantryItemExists: "These products are already at home",
+    pantryItemRemoved: (name) => `${name} removed from products at home`,
+    recipeItemsAdded: (count) =>
+      `${count} recipe ${count === 1 ? "item" : "items"} added to the list`,
+    recipeItemsAlreadyListed: "These ingredients are already on your list",
     priceSaved: "Price saved",
     budgetSaved: "Budget saved",
     budgetRemoved: "Budget removed",
@@ -445,7 +599,7 @@ const englishCopy: AppCopy = {
   },
   confirms: {
     clearListTitle: "Clear this list?",
-    clearListDescription: "All current items will be removed. Your history and templates will stay saved.",
+    clearListDescription: "All current items will be removed. Your history and products at home will stay saved.",
     clearListConfirm: "Clear list",
     clearDataTitle: "Clear all data?",
     clearDataDescription: "Your list, history, and personal settings will be deleted from this device only.",
@@ -478,6 +632,7 @@ const ukrainianCopy: AppCopy = {
     list: "Список",
     suggestions: "Ідеї",
     templates: "Шаблони",
+    pantry: "Вдома",
     history: "Історія",
     settings: "Ще",
   },
@@ -503,7 +658,7 @@ const ukrainianCopy: AppCopy = {
     errorDescription: "Локальні дані залишилися на пристрої. Спробуйте відкрити список ще раз.",
     retry: "Спробувати ще раз",
     primaryNavigation: "Основна навігація",
-    localData: "Усі дані залишаються на цьому пристрої.",
+    localData: "Список та історія зберігаються на цьому пристрої.",
     openShoppingMode: "Відкрити режим магазину",
     shoppingMode: "Режим магазину",
     openSettings: "Відкрити налаштування",
@@ -516,10 +671,12 @@ const ukrainianCopy: AppCopy = {
     progress: (boughtCount, totalCount) => `${boughtCount} з ${totalCount}`,
     progressAria: (progress) => `Куплено ${progress}%`,
     copyList: "Скопіювати",
-    clearPurchased: "Прибрати куплені",
+    clearPurchased: "Перенести куплені у «Вдома»",
     clearList: "Очистити список",
     emptyTitle: "Список готовий",
     emptyDescription: "Введіть кілька позицій через кому або почніть зі звичного товару.",
+    allPurchasedTitle: "Усі товари куплено",
+    allPurchasedDescription: "Перенесіть куплене у «Вдома» або знову покажіть його в налаштуваннях.",
     quickAdd: "Швидке додавання",
     addItems: "Додати товари",
     moveBack: (name) => `Повернути ${name} до списку`,
@@ -542,7 +699,7 @@ const ukrainianCopy: AppCopy = {
     starterDescription: "Кілька звичних позицій, з яких зручно почати новий список.",
     addToList: "Додати до списку",
     readyEyebrow: "Готовий набір",
-    readyDescription: "Додайте цей набір або виберіть інший на вкладці «Шаблони».",
+    readyDescription: "Додайте цей знайомий набір до списку покупок одним дотиком.",
     addSet: "Додати набір",
     rhythmEyebrow: "Ритм покупок",
     rhythmTitle: "Тут з’являться точні нагадування",
@@ -553,6 +710,62 @@ const ukrainianCopy: AppCopy = {
     title: "Шаблони покупок",
     subtitle: "Додавайте звичний набір товарів однією дією.",
     addItems: "Додати товари",
+  },
+  pantryRecipes: {
+    eyebrow: "Ваша кухня",
+    title: "Продукти вдома та рецепти",
+    subtitle: "Стежте за запасами й знаходьте страви з продуктів, які вже маєте.",
+    tabsLabel: "Продукти вдома та рецепти",
+    pantryTab: "Продукти вдома",
+    recipesTab: "Рецепти",
+    pantryTitle: "Продукти вдома",
+    pantryDescription: "Куплені товари з’являються тут після перенесення зі списку покупок.",
+    pantryCount: (count) => `В наявності: ${count}`,
+    addLabel: "Додати продукти вдома",
+    addPlaceholder: "Молоко, яйця, помідори",
+    addHint: "Кілька продуктів можна розділити комами.",
+    addAction: "Додати",
+    adding: "Додаємо…",
+    emptyPantryTitle: "Кухня готова до наповнення",
+    emptyPantryDescription: "Додайте те, що вже маєте, або приберіть куплені товари зі списку.",
+    categoryCount: (count) => `${count} ${count === 1 ? "продукт" : "продуктів"}`,
+    deletePantryItem: (name) => `Прибрати ${name} з продуктів удома`,
+    recipesTitle: "Готуйте з того, що є",
+    recipesDescription: "Оберіть до п’яти продуктів. Під час пошуку їхні назви надсилаються сервісу рецептів.",
+    chooseIngredients: "Оберіть продукти",
+    chooseIngredientsHint: "Побутова хімія та засоби гігієни не використовуються для пошуку рецептів.",
+    selectedCount: (count) => `Обрано ${count} з 5`,
+    selectionLimit: "Можна обрати щонайбільше п’ять продуктів.",
+    noEdibleTitle: "Спочатку додайте харчовий продукт",
+    noEdibleDescription: "Їжа з розділу «Продукти вдома» стане доступною для пошуку рецептів.",
+    search: "Знайти рецепти",
+    searching: "Шукаємо рецепти…",
+    offlineTitle: "Пошук рецептів недоступний офлайн",
+    offlineDescription: "Ваші продукти залишаються на місці. Під’єднайтеся до мережі для нового пошуку.",
+    idleTitle: "Готові знайти щось смачне?",
+    idleDescription: "Оберіть продукти, а потім запустіть пошук.",
+    emptyRecipesTitle: "Відповідних рецептів немає",
+    emptyRecipesDescription: "Спробуйте обрати інший продукт або менший набір.",
+    errorTitle: "Не вдалося завантажити рецепти",
+    errorDescription: "Сервіс рецептів може бути перевантажений. Ваші локальні продукти не постраждали.",
+    retry: "Спробувати ще раз",
+    recipesFound: (count) => `Знайдено рецептів: ${count}`,
+    coverage: (percent) => `Є вдома: ${percent}%`,
+    matchSummary: (matchedCount, missingCount) =>
+      `Збігів: ${matchedCount} · не вистачає: ${missingCount}`,
+    minutes: (count) => `${Math.round(count)} хв`,
+    servings: (count) => `${Math.round(count)} порцій`,
+    viewRecipe: "Переглянути склад",
+    ingredientsTitle: "Інгредієнти",
+    ingredientsDescription: "Продукти, яких бракує, вже обрано. Перевірте їх перед додаванням.",
+    available: "Є вдома",
+    missing: "Треба купити",
+    sourceRecipe: "Відкрити оригінальний рецепт",
+    sourceRecipeNewTab: "Відкрити оригінальний рецепт у новій вкладці",
+    addSelected: (count) => `Додати до списку: ${count}`,
+    addingSelected: "Додаємо до списку…",
+    nothingMissing: "У вас уже є все, що вказано в цьому рецепті.",
+    closeRecipe: "Закрити рецепт",
   },
   history: {
     eyebrow: "Ваш ритм",
@@ -603,10 +816,13 @@ const ukrainianCopy: AppCopy = {
     data: "Дані",
     installApp: "Встановити застосунок",
     installAvailable: "Додайте швидкий доступ на головний екран",
-    installUnavailable: "Доступно через меню браузера",
+    installIos: "Натисніть «Поділитися», а потім «На початковий екран»",
+    installInstalled: "Застосунок уже встановлено на цьому пристрої",
+    installUnavailable: "Цей браузер не підтримує встановлення",
     install: "Встановити",
+    installHelp: "Як встановити",
     exportData: "Експортувати дані",
-    exportDescription: "JSON-файл зі списком, історією та шаблонами",
+    exportDescription: "JSON-файл зі списком, історією та продуктами вдома",
     export: "Експорт",
     importData: "Імпортувати дані",
     importDescription: "Відновити збережену копію",
@@ -696,10 +912,20 @@ const ukrainianCopy: AppCopy = {
     importFailed: "Не вдалося прочитати цей файл",
     dataCleared: "Локальні дані очищено",
     listCleared: "Список очищено",
-    installFromBrowser: "Встановіть застосунок через меню браузера",
+    installFromBrowser: "У Safari натисніть «Поділитися», а потім «На початковий екран»",
     appInstalled: "Застосунок додано на пристрій",
+    updateAvailable: "Доступна нова версія",
+    updateNow: "Оновити",
+    updateFailed: "Не вдалося оновити застосунок. Спробуйте ще раз.",
+    offlineReady: "Застосунок готовий до роботи офлайн",
     categoryUpdated: "Категорію оновлено",
     purchased: (name) => `${name} куплено`,
+    purchasedMoved: (count) => `Перенесено додому куплених товарів: ${count}`,
+    pantryItemAdded: (count) => `Додано продуктів удома: ${count}`,
+    pantryItemExists: "Ці продукти вже є вдома",
+    pantryItemRemoved: (name) => `${name} прибрано з продуктів удома`,
+    recipeItemsAdded: (count) => `Додано інгредієнтів до списку: ${count}`,
+    recipeItemsAlreadyListed: "Ці інгредієнти вже є у вашому списку",
     priceSaved: "Ціну збережено",
     budgetSaved: "Бюджет збережено",
     budgetRemoved: "Бюджет прибрано",
@@ -709,7 +935,7 @@ const ukrainianCopy: AppCopy = {
   },
   confirms: {
     clearListTitle: "Очистити цей список?",
-    clearListDescription: "Усі поточні товари буде видалено. Історія та шаблони залишаться збереженими.",
+    clearListDescription: "Усі поточні товари буде видалено. Історія та продукти вдома залишаться збереженими.",
     clearListConfirm: "Очистити список",
     clearDataTitle: "Очистити всі дані?",
     clearDataDescription: "Список, історію та персональні налаштування буде видалено лише з цього пристрою.",

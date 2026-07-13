@@ -1,12 +1,21 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 
 import type {
   CurrencyCode,
-  ShoppingBackup,
   ShoppingItem,
+  ShoppingItemInput,
   ShoppingTemplate,
   ShoppingUnit,
 } from "../domain/types";
@@ -22,6 +31,7 @@ import {
   DesktopNavigation,
   ErrorState,
   LoadingState,
+  ScreenLoadingState,
   TopBar,
 } from "../components/AppLayout";
 import {
@@ -33,22 +43,39 @@ import {
 } from "../features/Dialogs";
 import { ShoppingListScreen } from "../features/ShoppingList";
 import { ShoppingMode } from "../features/ShoppingMode";
-import {
-  HistoryScreen,
-  SettingsScreen,
-  SuggestionsScreen,
-  TemplatesScreen,
-} from "../pages/SecondaryScreens";
 import { LocalizationProvider } from "../contexts/LocalizationContext";
-import { useIsMobileViewport } from "../hooks/useIsMobileViewport";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { getScreenFromPath, navigationItems } from "../navigation/constants";
+import { saveThemePreference } from "../storage/themePreference";
 import type {
-  BeforeInstallPromptEvent,
   PriceEntryTarget,
   ScreenId,
   ToastState,
 } from "../types/app";
 import { getCurrentShoppingListId, getPriceReferenceUnit, runAsyncAction } from "../utils/shopping";
+import { usePwa } from "./usePwa";
+
+const PantryRecipesScreen = lazy(async () => {
+  const pantryRecipesModule = await import("../features/PantryRecipes");
+  return { default: pantryRecipesModule.PantryRecipesScreen };
+});
+
+const SuggestionsScreen = lazy(async () => {
+  const secondaryScreensModule = await import("../pages/SecondaryScreens");
+  return { default: secondaryScreensModule.SuggestionsScreen };
+});
+
+const HistoryScreen = lazy(async () => {
+  const secondaryScreensModule = await import("../pages/SecondaryScreens");
+  return { default: secondaryScreensModule.HistoryScreen };
+});
+
+const SettingsScreen = lazy(async () => {
+  const secondaryScreensModule = await import("../pages/SecondaryScreens");
+  return { default: secondaryScreensModule.SettingsScreen };
+});
+
+const MAX_BACKUP_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 export const App = () => {
   const location = useLocation();
@@ -57,11 +84,13 @@ export const App = () => {
     isReady,
     error,
     items,
+    categories,
     templates,
     settings,
     purchaseEvents,
     shoppingListMeta,
     priceObservations,
+    pantryItems,
     initialize,
     addFromText,
     toggleItem,
@@ -69,6 +98,10 @@ export const App = () => {
     deleteItems,
     restoreItem,
     restoreItems,
+    addPantryItems,
+    deletePantryItem,
+    restorePantryItem,
+    addRecipeIngredients,
     clearBought,
     clearItems,
     applyTemplate,
@@ -81,8 +114,45 @@ export const App = () => {
     updateItem,
     setShoppingListBudget,
     savePriceObservation,
-    updateItemQuantity,
-  } = useShoppingStore();
+    updateItemQuantities,
+  } = useShoppingStore(
+    useShallow((state) => ({
+      isReady: state.isReady,
+      error: state.error,
+      items: state.items,
+      categories: state.categories,
+      templates: state.templates,
+      settings: state.settings,
+      purchaseEvents: state.purchaseEvents,
+      shoppingListMeta: state.shoppingListMeta,
+      priceObservations: state.priceObservations,
+      pantryItems: state.pantryItems,
+      initialize: state.initialize,
+      addFromText: state.addFromText,
+      toggleItem: state.toggleItem,
+      deleteItem: state.deleteItem,
+      deleteItems: state.deleteItems,
+      restoreItem: state.restoreItem,
+      restoreItems: state.restoreItems,
+      addPantryItems: state.addPantryItems,
+      deletePantryItem: state.deletePantryItem,
+      restorePantryItem: state.restorePantryItem,
+      addRecipeIngredients: state.addRecipeIngredients,
+      clearBought: state.clearBought,
+      clearItems: state.clearItems,
+      applyTemplate: state.applyTemplate,
+      updateSettings: state.updateSettings,
+      exportData: state.exportData,
+      importData: state.importData,
+      resetData: state.resetData,
+      setItemCategory: state.setItemCategory,
+      setItemNecessity: state.setItemNecessity,
+      updateItem: state.updateItem,
+      setShoppingListBudget: state.setShoppingListBudget,
+      savePriceObservation: state.savePriceObservation,
+      updateItemQuantities: state.updateItemQuantities,
+    })),
+  );
   const [isShoppingModeOpen, setShoppingModeOpen] = useState(false);
   const [showBoughtInShoppingMode, setShowBoughtInShoppingMode] = useState(false);
   const [selectedItem, setSelectedItem] = useState<ShoppingItem | null>(null);
@@ -91,29 +161,63 @@ export const App = () => {
   const [isBudgetReviewOpen, setBudgetReviewOpen] = useState(false);
   const [pendingClearList, setPendingClearList] = useState(false);
   const [pendingReset, setPendingReset] = useState(false);
-  const [isOnline, setOnline] = useState(() => navigator.onLine);
-  const [installPrompt, setInstallPrompt] =
-    useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const isMobileViewport = useIsMobileViewport();
+  const scrollPositions = useRef<Record<string, number>>({});
+  const {
+    isOnline,
+    installState,
+    isUpdateAvailable,
+    isOfflineReady,
+    serviceWorkerError,
+    installApp,
+    updateApp,
+    clearOfflineReady,
+    clearServiceWorkerError,
+  } = usePwa();
 
   const language = resolveDisplayLanguage(settings?.language);
   const copy = getAppCopy(language);
   const activeScreen = getScreenFromPath(location.pathname);
-  const currentShoppingListId = getCurrentShoppingListId(items);
-  const currentListMeta = currentShoppingListId
-    ? shoppingListMeta.find((meta) => meta.shoppingListId === currentShoppingListId)
-    : undefined;
-  const currentListItems = currentShoppingListId
-    ? items.filter((item) => item.shoppingListId === currentShoppingListId)
-    : [];
-  const unboughtItemsCount = items.filter((item) => !item.isBought).length;
-  const currentBudgetSummary = currentListMeta
-    ? getBudgetSummary(currentListItems, priceObservations, currentListMeta)
-    : null;
-  const selectedItemListMeta = selectedItem
-    ? shoppingListMeta.find((meta) => meta.shoppingListId === selectedItem.shoppingListId)
-    : undefined;
+  const currentShoppingListId = useMemo(
+    () => getCurrentShoppingListId(items),
+    [items],
+  );
+  const currentListMeta = useMemo(
+    () =>
+      currentShoppingListId
+        ? shoppingListMeta.find(
+            (meta) => meta.shoppingListId === currentShoppingListId,
+          )
+        : undefined,
+    [currentShoppingListId, shoppingListMeta],
+  );
+  const currentListItems = useMemo(
+    () =>
+      currentShoppingListId
+        ? items.filter((item) => item.shoppingListId === currentShoppingListId)
+        : [],
+    [currentShoppingListId, items],
+  );
+  const unboughtItemsCount = useMemo(
+    () => items.filter((item) => !item.isBought).length,
+    [items],
+  );
+  const currentBudgetSummary = useMemo(
+    () =>
+      currentListMeta
+        ? getBudgetSummary(currentListItems, priceObservations, currentListMeta)
+        : null,
+    [currentListItems, currentListMeta, priceObservations],
+  );
+  const selectedItemListMeta = useMemo(
+    () =>
+      selectedItem
+        ? shoppingListMeta.find(
+            (meta) => meta.shoppingListId === selectedItem.shoppingListId,
+          )
+        : undefined,
+    [selectedItem, shoppingListMeta],
+  );
   const selectedItemCurrency = selectedItemListMeta?.currency ?? settings.currency;
   const selectedItemPriceStats = selectedItem
     ? getProductPriceStats(
@@ -149,34 +253,29 @@ export const App = () => {
     runAsyncAction(navigator.setAppBadge(unboughtItemsCount));
   }, [isReady, unboughtItemsCount]);
 
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "auto" });
+  useLayoutEffect(() => {
+    const currentPath = location.pathname;
+    const savedScrollPositions = scrollPositions.current;
+    window.scrollTo({
+      top: savedScrollPositions[currentPath] ?? 0,
+      behavior: "auto",
+    });
+
+    return () => {
+      savedScrollPositions[currentPath] = window.scrollY;
+    };
   }, [location.pathname]);
 
   useEffect(() => {
-    const handleOnline = () => setOnline(true);
-    const handleOffline = () => setOnline(false);
+    if (location.pathname === "/templates") {
+      navigate("/pantry", { replace: true });
+      return;
+    }
 
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as BeforeInstallPromptEvent);
-    };
-
-    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-
-    return () =>
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-  }, []);
+    if (!navigationItems.some((item) => item.path === location.pathname)) {
+      navigate("/", { replace: true });
+    }
+  }, [location.pathname, navigate]);
 
   useEffect(() => {
     if (!toast) {
@@ -194,37 +293,41 @@ export const App = () => {
   }, [copy.toasts.operationFailed, error, isReady]);
 
   useEffect(() => {
-    const hasOpenOverlay =
-      isShoppingModeOpen ||
-      Boolean(selectedItem) ||
-      Boolean(priceTargetItem) ||
-      isBudgetDialogOpen ||
-      isBudgetReviewOpen ||
-      pendingClearList ||
-      pendingReset;
-
-    if (!hasOpenOverlay) {
-      return undefined;
+    if (!isOfflineReady) {
+      return;
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    setToast({ message: copy.toasts.offlineReady });
+    clearOfflineReady();
+  }, [clearOfflineReady, copy.toasts.offlineReady, isOfflineReady]);
 
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [
-    isBudgetDialogOpen,
-    isBudgetReviewOpen,
-    isShoppingModeOpen,
-    pendingClearList,
-    pendingReset,
-    priceTargetItem,
-    selectedItem,
-  ]);
+  useEffect(() => {
+    if (!serviceWorkerError) {
+      return;
+    }
+
+    if (import.meta.env.DEV) {
+      console.error(serviceWorkerError);
+    }
+
+    setToast({ message: copy.toasts.updateFailed });
+    clearServiceWorkerError();
+  }, [clearServiceWorkerError, copy.toasts.updateFailed, serviceWorkerError]);
+
+  const hasOpenOverlay =
+    isShoppingModeOpen ||
+    Boolean(selectedItem) ||
+    Boolean(priceTargetItem) ||
+    isBudgetDialogOpen ||
+    isBudgetReviewOpen ||
+    pendingClearList ||
+    pendingReset;
+
+  useBodyScrollLock(hasOpenOverlay);
 
   useEffect(() => {
     const themePreference = settings?.theme ?? "system";
+    saveThemePreference(themePreference);
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const updateTheme = () => {
       const activeTheme =
@@ -248,12 +351,15 @@ export const App = () => {
 
   useEffect(() => {
     document.documentElement.lang = language;
-    document.title = copy.app.documentTitle;
+    document.title =
+      activeScreen === "list"
+        ? copy.app.documentTitle
+        : `${copy.navigation[activeScreen]} · ${copy.app.brandName}`;
     document.querySelector('meta[name="description"]')?.setAttribute(
       "content",
       copy.app.documentDescription,
     );
-  }, [copy, language]);
+  }, [activeScreen, copy, language]);
 
   const selectScreen = (screenId: ScreenId) => {
     const targetPath = navigationItems.find((item) => item.id === screenId)?.path ?? "/";
@@ -359,11 +465,7 @@ export const App = () => {
   };
 
   const handleApplyQuantities = async (quantities: Record<string, number>) => {
-    await Promise.all(
-      Object.entries(quantities).map(([itemId, quantity]) =>
-        updateItemQuantity(itemId, quantity),
-      ),
-    );
+    await updateItemQuantities(quantities);
     setBudgetReviewOpen(false);
     showToast(copy.toasts.quantitiesUpdated);
   };
@@ -425,7 +527,11 @@ export const App = () => {
     }
 
     try {
-      const parsedBackup = JSON.parse(await selectedFile.text()) as ShoppingBackup;
+      if (selectedFile.size > MAX_BACKUP_FILE_SIZE_BYTES) {
+        throw new Error("The backup file is too large.");
+      }
+
+      const parsedBackup: unknown = JSON.parse(await selectedFile.text());
       await importData(parsedBackup);
       showToast(copy.toasts.dataRestored);
     } catch {
@@ -446,20 +552,69 @@ export const App = () => {
     showToast(copy.toasts.listCleared);
   };
 
+  const handleClearBought = async () => {
+    if (!currentShoppingListId) {
+      return;
+    }
+
+    const result = await clearBought(currentShoppingListId);
+
+    if (result.clearedCount > 0) {
+      showToast(copy.toasts.purchasedMoved(result.pantryAddedCount));
+    }
+  };
+
+  const handleAddPantryItems = async (input: string) => {
+    const result = await addPantryItems(input);
+
+    if (result.addedItems.length > 0) {
+      showToast(copy.toasts.pantryItemAdded(result.addedItems.length));
+      return;
+    }
+
+    if (result.existingCount > 0) {
+      showToast(copy.toasts.pantryItemExists);
+    }
+  };
+
+  const handleDeletePantryItem = async (itemId: string) => {
+    const deletedItem = await deletePantryItem(itemId);
+
+    if (!deletedItem) {
+      return;
+    }
+
+    showToast(copy.toasts.pantryItemRemoved(deletedItem.name), {
+      actionLabel: copy.common.undo,
+      onAction: () => restorePantryItem(deletedItem),
+    });
+  };
+
+  const handleAddRecipeIngredients = async (ingredients: ShoppingItemInput[]) => {
+    const result = await addRecipeIngredients(ingredients, currentShoppingListId);
+
+    if (result.addedItems.length === 0) {
+      showToast(copy.toasts.recipeItemsAlreadyListed);
+      return;
+    }
+
+    showToast(copy.toasts.recipeItemsAdded(result.addedItems.length), {
+      actionLabel: copy.navigation.list,
+      onAction: async () => selectScreen("list"),
+    });
+  };
+
   const handleInstall = async () => {
-    if (!installPrompt) {
+    const outcome = await installApp();
+
+    if (outcome === "unavailable") {
       showToast(copy.toasts.installFromBrowser);
       return;
     }
 
-    await installPrompt.prompt();
-    const choice = await installPrompt.userChoice;
-
-    if (choice.outcome === "accepted") {
+    if (outcome === "accepted") {
       showToast(copy.toasts.appInstalled);
     }
-
-    setInstallPrompt(null);
   };
 
   if (error && !isReady) {
@@ -480,8 +635,7 @@ export const App = () => {
 
   return (
     <LocalizationProvider copy={copy} language={language}>
-      <MotionConfig reducedMotion={isMobileViewport ? "always" : "user"}>
-        <main className="app-shell">
+      <main className="app-shell">
       <div className="app-frame">
         <DesktopNavigation activeScreen={activeScreen} onSelect={selectScreen} />
         <section className="app-main">
@@ -491,24 +645,20 @@ export const App = () => {
             onOpenShoppingMode={() => setShoppingModeOpen(true)}
             onOpenSettings={() => selectScreen("settings")}
           />
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeScreen}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
-              transition={{ duration: 0.18 }}
-            >
+          <div className="screen-content" key={activeScreen}>
+            <Suspense fallback={<ScreenLoadingState />}>
               {activeScreen === "list" && (
                 <ShoppingListScreen
                   items={currentListItems}
+                  categories={categories}
                   settings={settings}
                   listMeta={currentListMeta}
+                  priceObservations={priceObservations}
                   budgetSummary={currentBudgetSummary}
                   onAddText={handleAddText}
                   onToggleItem={handleToggleItem}
                   onDeleteItem={handleDeleteItem}
-                  onClearBought={clearBought}
+                  onClearBought={() => runAsyncAction(handleClearBought())}
                   onClearList={() => setPendingClearList(true)}
                   onCopyList={handleCopyList}
                   onOpenShoppingMode={() => setShoppingModeOpen(true)}
@@ -527,10 +677,14 @@ export const App = () => {
                   onOpenSettings={() => selectScreen("settings")}
                 />
               )}
-              {activeScreen === "templates" && (
-                <TemplatesScreen
-                  templates={templates}
-                  onApplyTemplate={handleApplyTemplate}
+              {activeScreen === "pantry" && (
+                <PantryRecipesScreen
+                  pantryItems={pantryItems}
+                  categories={categories}
+                  isOnline={isOnline}
+                  onAddPantryItems={handleAddPantryItems}
+                  onDeletePantryItem={handleDeletePantryItem}
+                  onAddRecipeIngredients={handleAddRecipeIngredients}
                 />
               )}
               {activeScreen === "history" && (
@@ -553,7 +707,7 @@ export const App = () => {
               {activeScreen === "settings" && (
                 <SettingsScreen
                   settings={settings}
-                  canInstall={Boolean(installPrompt)}
+                  installState={installState}
                   onUpdateSettings={updateSettings}
                   onInstall={handleInstall}
                   onExport={handleExport}
@@ -561,16 +715,17 @@ export const App = () => {
                   onReset={() => setPendingReset(true)}
                 />
               )}
-            </motion.div>
-          </AnimatePresence>
+            </Suspense>
+          </div>
         </section>
       </div>
       <BottomNavigation activeScreen={activeScreen} onSelect={selectScreen} />
-      <AnimatePresence>
-        {isShoppingModeOpen && (
+      {isShoppingModeOpen && (
           <ShoppingMode
             items={currentListItems}
+            categories={categories}
             listMeta={currentListMeta}
+            priceObservations={priceObservations}
             budgetSummary={currentBudgetSummary}
             showBought={showBoughtInShoppingMode}
             onClose={() => setShoppingModeOpen(false)}
@@ -580,12 +735,11 @@ export const App = () => {
             onOpenCategory={(item) => setSelectedItem(item)}
             onReviewBudget={() => setBudgetReviewOpen(true)}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {selectedItem && (
+      )}
+      {selectedItem && (
           <CategoryDialog
             item={selectedItem}
+            categories={categories}
             currency={selectedItemCurrency}
             priceStats={selectedItemPriceStats}
             onClose={() => setSelectedItem(null)}
@@ -613,10 +767,8 @@ export const App = () => {
               setPriceTargetItem(selectedItem);
             }}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {isBudgetDialogOpen && currentShoppingListId && (
+      )}
+      {isBudgetDialogOpen && currentShoppingListId && (
           <BudgetDialog
             meta={currentListMeta}
             defaultCurrency={settings.currency}
@@ -625,10 +777,8 @@ export const App = () => {
             onRemove={handleRemoveBudget}
             onSave={handleSaveBudget}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {priceTargetItem && (
+      )}
+      {priceTargetItem && (
           <PriceDialog
             item={priceTargetItem}
             observations={priceObservations}
@@ -652,10 +802,8 @@ export const App = () => {
               )
             }
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {isBudgetReviewOpen && currentListMeta && currentBudgetSummary && (
+      )}
+      {isBudgetReviewOpen && currentListMeta && currentBudgetSummary && (
           <BudgetReviewDialog
             items={currentListItems}
             observations={priceObservations}
@@ -664,10 +812,8 @@ export const App = () => {
             onRemoveOptional={handleRemoveOptionalItems}
             onApplyQuantities={handleApplyQuantities}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {pendingClearList && (
+      )}
+      {pendingClearList && (
           <ConfirmDialog
             title={copy.confirms.clearListTitle}
             description={copy.confirms.clearListDescription}
@@ -675,10 +821,8 @@ export const App = () => {
             onCancel={() => setPendingClearList(false)}
             onConfirm={handleClearList}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {pendingReset && (
+      )}
+      {pendingReset && (
           <ConfirmDialog
             title={copy.confirms.clearDataTitle}
             description={copy.confirms.clearDataDescription}
@@ -686,47 +830,55 @@ export const App = () => {
             onCancel={() => setPendingReset(false)}
             onConfirm={handleReset}
           />
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {toast && (
+      )}
+      {(toast || isUpdateAvailable) && (
           <div
             className={`toast-region ${activeScreen === "list" && !isShoppingModeOpen ? "above-add-bar" : ""}`}
             role="status"
             aria-live="polite"
           >
-            <motion.div
-              className="toast"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-            >
-              <CheckCircle2 size={17} />
-              <span>{toast.message}</span>
-              {toast.onAction && toast.actionLabel && (
-                <button
-                  className="toast-action"
-                  type="button"
-                  onClick={() => {
-                    const toastAction = toast.onAction;
-
-                    if (!toastAction) {
-                      return;
-                    }
-
-                    setToast(null);
-                    runAsyncAction(toastAction());
-                  }}
-                >
-                  {toast.actionLabel}
-                </button>
+            <div className="toast-stack">
+              {isUpdateAvailable && (
+                <div className="toast">
+                  <CheckCircle2 size={17} />
+                  <span>{copy.toasts.updateAvailable}</span>
+                  <button
+                    className="toast-action"
+                    type="button"
+                    onClick={() => runAsyncAction(updateApp())}
+                  >
+                    {copy.toasts.updateNow}
+                  </button>
+                </div>
               )}
-            </motion.div>
+              {toast && (
+                <div className="toast">
+                  <CheckCircle2 size={17} />
+                  <span>{toast.message}</span>
+                  {toast.onAction && toast.actionLabel && (
+                    <button
+                      className="toast-action"
+                      type="button"
+                      onClick={() => {
+                        const toastAction = toast.onAction;
+
+                        if (!toastAction) {
+                          return;
+                        }
+
+                        setToast(null);
+                        runAsyncAction(toastAction());
+                      }}
+                    >
+                      {toast.actionLabel}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </AnimatePresence>
-        </main>
-      </MotionConfig>
+      )}
+      </main>
     </LocalizationProvider>
   );
 };

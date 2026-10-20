@@ -339,7 +339,7 @@ export const App = () => {
       document.documentElement.dataset.theme = activeTheme;
       document.querySelector('meta[name="theme-color"]')?.setAttribute(
         "content",
-        activeTheme === "dark" ? "#10221a" : "#0f766e",
+        activeTheme === "dark" ? "#16141d" : "#7052c4",
       );
     };
 

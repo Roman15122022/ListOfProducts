@@ -134,7 +134,6 @@ export const ShoppingListScreen = ({
       <section className="overview-panel panel">
         <div className="page-title-row">
           <div>
-            <p className="eyebrow">{copy.list.today}</p>
             <h1 className="page-title">{copy.list.title}</h1>
             <p className="page-subtitle">{copy.list.subtitle}</p>
           </div>
@@ -165,7 +164,7 @@ export const ShoppingListScreen = ({
             aria-valuemax={100}
             aria-valuenow={progress}
           >
-            <div className="progress-fill" style={{ width: `${progress}%` }} />
+            <div className="progress-fill" style={{ transform: `scaleX(${progress / 100})` }} />
           </div>
         </div>
         {listMeta?.budgetAmountMinor !== undefined && budgetSummary && (
@@ -188,29 +187,35 @@ export const ShoppingListScreen = ({
           <button
             className="action-chip"
             type="button"
+            aria-label={copy.list.copyList}
+            title={copy.list.copyList}
             onClick={() => runAsyncAction(onCopyList())}
           >
             <Copy size={15} />
-            {copy.list.copyList}
+            <span className="action-chip-label">{copy.list.copyList}</span>
           </button>
           {listMeta && listMeta.budgetAmountMinor === undefined && (
             <button
               className="action-chip action-chip-budget"
               type="button"
+              aria-label={copy.budget.addBudget}
+              title={copy.budget.addBudget}
               onClick={onOpenBudget}
             >
               <Wallet size={16} />
-              {copy.budget.addBudget}
+              <span className="action-chip-label">{copy.budget.addBudget}</span>
             </button>
           )}
           {boughtItemsCount > 0 && (
             <button
               className="action-chip action-chip-clear"
               type="button"
+              aria-label={copy.list.clearPurchased}
+              title={copy.list.clearPurchased}
               onClick={onClearBought}
             >
               <ArchiveRestore size={15} />
-              {copy.list.clearPurchased}
+              <span className="action-chip-label">{copy.list.clearPurchased}</span>
             </button>
           )}
         </div>
@@ -292,7 +297,7 @@ export const BudgetSummaryBar = ({
         : "";
 
   return (
-    <div className={`budget-summary ${statusClass} ${compact ? "compact" : ""}`}>
+    <div className={`budget-summary ${statusClass} ${compact ? "compact" : ""} ${summary.pricedCount === 0 ? "no-estimate" : ""}`}>
       <div className="budget-summary-head">
         <strong>{copy.budget.budget}</strong>
         <span className="budget-status">
@@ -300,19 +305,19 @@ export const BudgetSummaryBar = ({
         </span>
       </div>
       <div className="budget-values">
-        <div className="budget-value">
-          <span>{copy.budget.expected}</span>
-          <strong>
-            {summary.pricedCount === 0
-              ? "—"
-              : formatMinorRange(
-                  summary.lowAmountMinor,
-                  summary.highAmountMinor,
-                  summary.currency,
-                  language,
-                )}
-          </strong>
-        </div>
+        {summary.pricedCount > 0 && (
+          <div className="budget-value">
+            <span>{copy.budget.expected}</span>
+            <strong>
+              {formatMinorRange(
+                summary.lowAmountMinor,
+                summary.highAmountMinor,
+                summary.currency,
+                language,
+              )}
+            </strong>
+          </div>
+        )}
         <div className="budget-value">
           <span>{copy.budget.budget}</span>
           <strong>
@@ -409,7 +414,7 @@ export const AddItemBar = ({
       }}
     >
       <div className="add-input-wrap">
-        <Plus size={19} />
+        <ShoppingBasket size={19} aria-hidden="true" />
         <input
           className="add-input"
           value={input}
@@ -529,6 +534,7 @@ export const ShoppingItemRow = ({
         aria-label={
           item.isBought ? copy.list.moveBack(item.name) : copy.list.markPurchased(item.name)
         }
+        aria-pressed={item.isBought}
         onClick={() => runAsyncAction(onToggleItem(item.id))}
       >
         <span

@@ -72,12 +72,12 @@ export const Brand = () => {
 
   return (
     <div className="brand-mark">
-      <div className="brand-icon">
+      <div className="brand-icon" aria-hidden="true">
         <ShoppingBasket size={21} strokeWidth={2.3} />
       </div>
       <div className="brand-copy">
-        <span>{copy.app.brandTagline}</span>
         <strong>{copy.app.brandName}</strong>
+        <span>{copy.app.brandTagline}</span>
       </div>
     </div>
   );
@@ -165,10 +165,16 @@ export const TopBar = ({
   onOpenSettings: () => void;
 }) => {
   const { copy } = useLocalization();
+  const activeNavigationItem = navigationItems.find((item) => item.id === activeScreen);
+  const ActiveScreenIcon = activeNavigationItem?.icon ?? ShoppingBasket;
 
   return (
     <header className="topbar">
       <Brand />
+      <span className="topbar-location">
+        <ActiveScreenIcon size={17} aria-hidden="true" />
+        {copy.navigation[activeScreen]}
+      </span>
       <div className="topbar-actions">
         {!isOnline && (
           <span

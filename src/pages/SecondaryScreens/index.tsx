@@ -87,7 +87,6 @@ export const SuggestionsScreen = ({
   return (
     <div className="secondary-screen">
       <section className="screen-heading panel">
-        <p className="eyebrow">{copy.suggestions.eyebrow}</p>
         <h1>{copy.suggestions.title}</h1>
         <p>{copy.suggestions.subtitle}</p>
       </section>
@@ -111,11 +110,6 @@ export const SuggestionsScreen = ({
               <div className="suggestion-symbol">
                 <BellRing size={19} />
               </div>
-              <span className="eyebrow">
-                {hasPurchaseHistory
-                  ? copy.suggestions.frequentEyebrow
-                  : copy.suggestions.starterEyebrow}
-              </span>
             </div>
             <h2>
               {hasPurchaseHistory
@@ -157,7 +151,6 @@ export const SuggestionsScreen = ({
                 <div className="suggestion-symbol">
                   <ShoppingBasket size={19} />
                 </div>
-                <span className="eyebrow">{copy.suggestions.readyEyebrow}</span>
               </div>
               <h2>{localizedBreakfastTemplate.name}</h2>
               <p>{copy.suggestions.readyDescription}</p>
@@ -183,7 +176,6 @@ export const SuggestionsScreen = ({
               <div className="suggestion-symbol">
                 <Clock3Icon />
               </div>
-              <span className="eyebrow">{copy.suggestions.rhythmEyebrow}</span>
             </div>
             <h2>{copy.suggestions.rhythmTitle}</h2>
             <p>{copy.suggestions.rhythmDescription}</p>
@@ -211,7 +203,6 @@ export const HistoryScreen = ({
   return (
     <div className="secondary-screen">
       <section className="screen-heading panel">
-        <p className="eyebrow">{copy.history.eyebrow}</p>
         <h1>{copy.history.title}</h1>
         <p>{copy.history.subtitle}</p>
       </section>
@@ -323,7 +314,6 @@ export const SettingsScreen = ({
   return (
     <div className="secondary-screen">
       <section className="screen-heading panel">
-        <p className="eyebrow">{copy.settings.eyebrow}</p>
         <h1>{copy.settings.title}</h1>
         <p>{copy.settings.subtitle}</p>
       </section>

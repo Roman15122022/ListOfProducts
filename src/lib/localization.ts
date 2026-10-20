@@ -343,8 +343,8 @@ const englishCopy: AppCopy = {
   },
   list: {
     today: "Today",
-    title: "Shopping without the noise",
-    subtitle: "Add a whole line, and your list will sort the items into categories for you.",
+    title: "Your shopping list",
+    subtitle: "Add what you need. We’ll keep it organised by category.",
     done: "Done",
     progress: (boughtCount, totalCount) => `${boughtCount} of ${totalCount}`,
     progressAria: (progress) => `${progress}% purchased`,
@@ -665,8 +665,8 @@ const ukrainianCopy: AppCopy = {
   },
   list: {
     today: "Сьогодні",
-    title: "Покупки без зайвого",
-    subtitle: "Додавайте кілька позицій одним рядком — список сам розкладе їх за категоріями.",
+    title: "Мій список покупок",
+    subtitle: "Додавайте потрібне — ми впорядкуємо все за категоріями.",
     done: "Готово",
     progress: (boughtCount, totalCount) => `${boughtCount} з ${totalCount}`,
     progressAria: (progress) => `Куплено ${progress}%`,

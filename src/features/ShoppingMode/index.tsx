@@ -63,7 +63,6 @@ export const ShoppingMode = ({
       <div className="shopping-mode-frame">
         <header className="shopping-mode-head">
           <div>
-            <p>{copy.mode.eyebrow}</p>
             <h1 id="shopping-mode-title">{copy.mode.title}</h1>
           </div>
           <div className="mode-actions">
@@ -99,7 +98,7 @@ export const ShoppingMode = ({
             aria-valuemax={100}
             aria-valuenow={progress}
           >
-            <div className="progress-fill" style={{ width: `${progress}%` }} />
+            <div className="progress-fill" style={{ transform: `scaleX(${progress / 100})` }} />
           </div>
         </section>
         {listMeta?.budgetAmountMinor !== undefined && budgetSummary && (

@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#0f766e" />
+    <meta name="theme-color" content="#7052c4" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Shopping List" />
@@ -24,7 +24,7 @@
           : themePreference;
         document.documentElement.dataset.theme = activeTheme;
         document.querySelector('meta[name="theme-color"]').content =
-          activeTheme === "dark" ? "#10221a" : "#0f766e";
+          activeTheme === "dark" ? "#16141d" : "#7052c4";
       } catch {
         document.documentElement.dataset.theme = "light";
       }

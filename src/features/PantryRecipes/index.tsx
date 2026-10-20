@@ -183,7 +183,6 @@ export const PantryRecipesScreen = ({
           <Refrigerator size={23} />
         </div>
         <div>
-          <p className="eyebrow">{copy.pantryRecipes.eyebrow}</p>
           <h1>{copy.pantryRecipes.title}</h1>
           <p>{copy.pantryRecipes.subtitle}</p>
         </div>
@@ -272,9 +271,9 @@ const PantryPanel = ({
     <section className="panel pantry-panel">
       <div className="pantry-section-title">
         <div>
-          <p className="eyebrow">{copy.pantryRecipes.pantryCount(pantryItems.length)}</p>
           <h2>{copy.pantryRecipes.pantryTitle}</h2>
           <p>{copy.pantryRecipes.pantryDescription}</p>
+          <span className="pantry-summary-count">{copy.pantryRecipes.pantryCount(pantryItems.length)}</span>
         </div>
       </div>
       <form className="pantry-add-form" onSubmit={onSubmit}>
@@ -367,9 +366,9 @@ const RecipesPanel = ({
       <section className="panel recipe-search-panel">
         <div className="pantry-section-title">
           <div>
-            <p className="eyebrow">{copy.pantryRecipes.selectedCount(selectedPantryItemIds.length)}</p>
             <h2>{copy.pantryRecipes.recipesTitle}</h2>
             <p>{copy.pantryRecipes.recipesDescription}</p>
+            <span className="pantry-summary-count">{copy.pantryRecipes.selectedCount(selectedPantryItemIds.length)}</span>
           </div>
           <ChefHat size={27} />
         </div>
@@ -514,8 +513,8 @@ const RecipeCard = ({
         <span>{copy.pantryRecipes.coverage(Math.round(rankedRecipe.coverage * 100))}</span>
       </div>
       <div className="recipe-card-body">
-        <span className="eyebrow">{recipe.source}</span>
         <h3 lang={language === "uk" ? "en" : undefined}>{recipe.label}</h3>
+        <span className="recipe-source-label">{recipe.source}</span>
         <p>
           {copy.pantryRecipes.matchSummary(
             rankedRecipe.matchedIngredientCount,
@@ -592,10 +591,10 @@ const RecipeReviewDialog = ({
       <div className="dialog-content recipe-review-dialog">
         <div className="recipe-review-header">
           <div>
-            <p className="eyebrow">{rankedRecipe.recipe.source}</p>
             <h2 id="dialog-title" lang={language === "uk" ? "en" : undefined}>
               {rankedRecipe.recipe.label}
             </h2>
+            <span className="recipe-source-label">{rankedRecipe.recipe.source}</span>
             <p id="dialog-description">{copy.pantryRecipes.ingredientsDescription}</p>
           </div>
           <button

@@ -9,3 +9,8 @@ coverage
 .env.*
 !.env.example
 *.local
+.playwright-mcp/
+.impeccable/review/
+.impeccable/decisions/
+.impeccable/questions/
+.impeccable/hook.cache.json
